@@ -1,0 +1,27 @@
+# --- Compiled Executables ---
+# Ignore the specific names of your compiled programs
+generate_test
+flow_sim
+grid_test
+
+# Ignore all files with no extension (common for Linux/macOS binaries)
+*
+!*.*
+!Makefile
+!README.md
+
+# --- Build Artifacts ---
+*.o
+*.out
+*.exe
+
+# --- Large Data Files ---
+# Ignore the generated TIF files so they don't bloat the repo
+test_data/*.tif
+*.tif
+*.pcap
+
+# --- IDE & System Files ---
+.vscode/
+.DS_Store
+build/
