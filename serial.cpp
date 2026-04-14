@@ -96,33 +96,90 @@ void add_rain(double *water_levels, int width, int height, double rain)
     }
 }
 
+// A helper function to run at the start of every timestep
+void compute_water_surface_elevations(
+    double *terrain_elevations,
+    double *water_levels,
+    double *surface_elevations_out,
+    int elev_width,
+    int elev_height)
+{
+    int grid_width = elev_width - 1;
+    int grid_height = elev_height - 1;
+
+    for (int y = 0; y < elev_height; y++)
+    {
+        for (int x = 0; x < elev_width; x++)
+        {
+
+            double total_water = 0.0;
+            int cells_counted = 0;
+
+            // Check the 4 cells touching this corner node.
+            // If they are within bounds, add their water depth to our average.
+
+            // Northwest cell
+            if (x > 0 && y > 0)
+            {
+                total_water += water_levels[(y - 1) * grid_width + (x - 1)];
+                cells_counted++;
+            }
+            // Northeast cell
+            if (x < grid_width && y > 0)
+            {
+                total_water += water_levels[(y - 1) * grid_width + x];
+                cells_counted++;
+            }
+            // Southwest cell
+            if (x > 0 && y < grid_height)
+            {
+                total_water += water_levels[y * grid_width + (x - 1)];
+                cells_counted++;
+            }
+            // Southeast cell
+            if (x < grid_width && y < grid_height)
+            {
+                total_water += water_levels[y * grid_width + x];
+                cells_counted++;
+            }
+
+            double avg_water_depth = (cells_counted > 0) ? (total_water / cells_counted) : 0.0;
+
+            // The new "terrain" the water sees is the actual dirt + the accumulated water
+            surface_elevations_out[y * elev_width + x] = terrain_elevations[y * elev_width + x] + avg_water_depth;
+        }
+    }
+}
+
 void run_simulation(
-    GridCell *precomputed_cell_geometry,
+    double *elevation,
+    double *surface_elevations,
     double *a,
     double *b,
     int num_timesteps,
-    int width,
-    int height,
+    int elev_width,
+    int elev_height,
     double dt, // Added time step
     double total_rainfall_inches)
 {
     // Add water each timestep to simulate rainfall
     double rain_per_timestep = total_rainfall_inches / num_timesteps;
+    int grid_width = elev_width - 1;
+    int grid_height = elev_height - 1;
+    GridCell *geometry = (GridCell *)malloc(grid_width * grid_height * sizeof(GridCell));
     for (int i = 0; i < num_timesteps; i++)
     {
-        if (i % 2 == 0)
-        {
-            add_rain(a, width, height, rain_per_timestep);
-            timestep_forward(precomputed_cell_geometry, a, b, width, height, dt);
-        }
-        else
-        {
-            add_rain(b, width, height, rain_per_timestep);
-            timestep_forward(precomputed_cell_geometry, b, a, width, height, dt);
-        }
+        double *in = i % 2 == 0 ? a : b;
+        double *out = i % 2 == 0 ? b : a;
+        add_rain(in, grid_width, grid_height, rain_per_timestep);
+        compute_water_surface_elevations(elevation, in, surface_elevations, elev_width, elev_height);
+        compute_grid_geometry(surface_elevations, elev_width, elev_height, geometry);
+        timestep_forward(geometry, in, out, grid_width, grid_height, dt);
     }
+    free(geometry);
 }
 
+// Helper function for debugging (only use for small .tif files)
 void printGrid(double arr[], int size, int cols)
 {
     for (int i = 0; i < size; ++i)
@@ -161,7 +218,7 @@ int main(int argc, char *argv[])
     double rain_inches_total = 1;
     if (argc > 2)
     {
-        int num_timesteps = std::stoi(argv[2]);
+        num_timesteps = std::stoi(argv[2]);
     }
     if (argc > 3)
     {
@@ -174,36 +231,32 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    printGrid(elevations, width * height, width);
-
     // Compute flow steepness and direction for each cell in grid
     int grid_width = width - 1;
     int grid_height = height - 1;
-    GridCell *geometry = (GridCell *)malloc(grid_width * grid_height * sizeof(GridCell));
-    compute_grid_geometry(elevations, width, height, geometry);
-    free(elevations); // We don't need elevations anymore; geometry holds the static gradients!
 
     // Setup water grids
     double *a = (double *)calloc(grid_width * grid_height, sizeof(double)); // calloc zeroes the memory
     double *b = (double *)calloc(grid_width * grid_height, sizeof(double));
 
+    double *surface_elevations = (double *)malloc(width * height * sizeof(double));
+
     // Simulation Parameters
     double dt = 1; // Time step (seconds)
 
     // Run the simulation
-    run_simulation(geometry, a, b, num_timesteps, grid_width, grid_height, dt, inch_to_meter(rain_inches_total));
+    run_simulation(elevations, surface_elevations, a, b, num_timesteps, width, height, dt, inch_to_meter(rain_inches_total));
 
     // If num_timesteps is even, 'a' holds the final state. If odd, 'b' holds it.
     double *result = (num_timesteps % 2 == 0) ? a : b;
 
-    std::cout << "final water level\n";
-    printGrid(result, grid_width * grid_height, grid_width);
     write_bmp(filename, grid_width, grid_height, result);
 
     // Cleanup
     free(a);
     free(b);
-    free(geometry);
+    free(surface_elevations);
+    free(elevations);
 
     return 0;
 }
