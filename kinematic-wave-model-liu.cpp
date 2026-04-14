@@ -7,6 +7,7 @@
  */
 
 #include <cmath>
+#include <algorithm> 
 
 const double pi = 3.14159265358979323846;
 
@@ -24,12 +25,12 @@ struct Discharge {
     double west = 0.0;
 };
 
-GridCell flow_vector_direction(int northwest, int northeast, int southeast, int southwest) {
+GridCell flow_vector_direction(double northwest, double northeast, double southeast, double southwest) {
     // See Figure 3b for corner mappings
-    int z1 = northwest;
-    int z2 = northeast;
-    int z3 = southeast;
-    int z4 = southwest;
+    double z1 = northwest;
+    double z2 = northeast;
+    double z3 = southeast;
+    double z4 = southwest;
 
     // Equation 13
     double dF_dx_transformed = (z1+z2-z3-z4)/4.0;
@@ -49,14 +50,27 @@ GridCell flow_vector_direction(int northwest, int northeast, int southeast, int 
     return {.theta = theta, .gamma = gamma};
 }
 
-Discharge compute_discharge(GridCell cell, double cell_water_level) {
-    // Very naive implementation simply scales outflow based on cell grade to
-    // compute total cell discharge (q)
-    // TODO: consider adding infiltration to the model
-    double q = cell.theta/(pi/2.0)*cell_water_level;
+// 'dt' (time step) scales flow rates into volumes
+Discharge compute_discharge(GridCell cell, double cell_water_level, double dt) {
+    // Calculate flow rate, then multiply by the time step (dt) to get the volume 
+    // of water attempting to move during this iteration.
+    double q_rate = (cell.theta / (pi / 2.0)) * cell_water_level;
+    double q_vol = q_rate * dt;
 
-    double qx = q * cos(cell.gamma);
-    double qy = q * sin(cell.gamma);
+    double qx = q_vol * cos(cell.gamma);
+    double qy = q_vol * sin(cell.gamma);
+
+    // --- MASS CONSERVATION CHECK ---
+    // The total water trying to leave the cell is the sum of the absolute directional flows.
+    double total_outflow = std::abs(qx) + std::abs(qy);
+
+    // If the gradient is so steep that it tries to push out more water than exists,
+    // we scale the vectors down proportionally. This prevents "negative water" bugs.
+    if (total_outflow > cell_water_level) {
+        double scale = cell_water_level / total_outflow;
+        qx *= scale;
+        qy *= scale;
+    }
 
     Discharge discharge = {};
 
