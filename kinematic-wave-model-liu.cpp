@@ -88,3 +88,8 @@ Discharge compute_discharge(GridCell cell, double cell_water_level, double dt) {
 
     return discharge;
 }
+
+double inch_to_meter(double inch)
+{
+    return inch * .0254;
+}

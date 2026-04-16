@@ -201,11 +201,6 @@ void usage()
     std::cout << "USAGE: ./serial <elev.tif> <num_iter> <total_rainfall(inches)>\n";
 }
 
-double inch_to_meter(double inch)
-{
-    return inch * .0254;
-}
-
 int main(int argc, char *argv[])
 {
     if (argc < 2)
