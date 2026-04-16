@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <omp.h>
 #include <chrono>
 #include "read-geo-data.cpp"
 #include "write-bmp.cpp"
@@ -22,6 +23,7 @@ void timestep_forward(
     std::memcpy(water_levels_out, water_levels_in, width * height * sizeof(double));
 
     // Iterate through each cell, subtract outflow, and add inflow to neighbors
+#pragma omp for
     for (int y = 0; y < height; y++)
     {
         for (int x = 0; x < width; x++)
@@ -78,6 +80,7 @@ void compute_grid_geometry(
 {
     int grid_width = elevations_width - 1;
 
+#pragma omp for
     for (int y = 0; y < elevations_height - 1; y++)
     {
         for (int x = 0; x < elevations_width - 1; x++)
@@ -93,6 +96,7 @@ void compute_grid_geometry(
 
 void add_rain(double *water_levels, int width, int height, double rain)
 {
+#pragma omp for
     for (int i = 0; i < width * height; i++)
     {
         water_levels[i] += rain;
@@ -110,6 +114,7 @@ void compute_water_surface_elevations(
     int grid_width = elev_width - 1;
     int grid_height = elev_height - 1;
 
+#pragma omp for
     for (int y = 0; y < elev_height; y++)
     {
         for (int x = 0; x < elev_width; x++)
@@ -163,21 +168,24 @@ void run_simulation(
     int elev_width,
     int elev_height,
     double dt, // Added time step
-    double total_rainfall_inches)
+    double total_rainfall_inches,
+    int thread_count)
 {
-    // Add water each timestep to simulate rainfall
     double rain_per_timestep = total_rainfall_inches / num_timesteps;
     int grid_width = elev_width - 1;
     int grid_height = elev_height - 1;
     GridCell *geometry = (GridCell *)malloc(grid_width * grid_height * sizeof(GridCell));
-    for (int i = 0; i < num_timesteps; i++)
+#pragma omp parallel num_threads(thread_count)
     {
-        double *in = i % 2 == 0 ? a : b;
-        double *out = i % 2 == 0 ? b : a;
-        add_rain(in, grid_width, grid_height, rain_per_timestep);
-        compute_water_surface_elevations(elevation, in, surface_elevations, elev_width, elev_height);
-        compute_grid_geometry(surface_elevations, elev_width, elev_height, geometry);
-        timestep_forward(geometry, in, out, grid_width, grid_height, dt);
+        for (int i = 0; i < num_timesteps; i++)
+        {
+            double *in = i % 2 == 0 ? a : b;
+            double *out = i % 2 == 0 ? b : a;
+            add_rain(in, grid_width, grid_height, rain_per_timestep);
+            compute_water_surface_elevations(elevation, in, surface_elevations, elev_width, elev_height);
+            compute_grid_geometry(surface_elevations, elev_width, elev_height, geometry);
+            timestep_forward(geometry, in, out, grid_width, grid_height, dt);
+        }
     }
     free(geometry);
 }
@@ -201,26 +209,29 @@ void printGrid(double arr[], int size, int cols)
 
 void usage()
 {
-    std::cout << "USAGE: ./serial <elev.tif> <num_iter> <total_rainfall(inches)>\n";
+    std::cout << "USAGE: ./serial <thread_count> <elev.tif> <num_iter> <total_rainfall(inches)>\n";
 }
+
 
 int main(int argc, char *argv[])
 {
-    if (argc < 2)
+    if (argc < 3)
     {
         usage();
         return 1;
     }
-    char *filename = argv[1];
+    int thread_count = std::stoi(argv[1]);
+    char *filename = argv[2];
     int num_timesteps = 1000; // defaults
     double rain_inches_total = 1;
-    if (argc > 2)
-    {
-        num_timesteps = std::stoi(argv[2]);
-    }
+
     if (argc > 3)
     {
-        rain_inches_total = std::stod(argv[3]);
+        num_timesteps = std::stoi(argv[3]);
+    }
+    if (argc > 4)
+    {
+        rain_inches_total = std::stod(argv[4]);
     }
 
     auto [elevations, width, height] = read_geo_data(filename);
@@ -244,7 +255,7 @@ int main(int argc, char *argv[])
 
     // Run the simulation
     auto start_time = std::chrono::high_resolution_clock::now();
-    run_simulation(elevations, surface_elevations, a, b, num_timesteps, width, height, dt, inch_to_meter(rain_inches_total));
+    run_simulation(elevations, surface_elevations, a, b, num_timesteps, width, height, dt, inch_to_meter(rain_inches_total), thread_count);
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = end_time - start_time;
     std::cout << "Simulation completed in " << diff.count() << " seconds." << std::endl;
@@ -254,7 +265,6 @@ int main(int argc, char *argv[])
 
     // write_bmp(filename, grid_width, grid_height, result);
     write_jpg(filename, grid_width, grid_height, result);
-
     // Cleanup
     free(a);
     free(b);

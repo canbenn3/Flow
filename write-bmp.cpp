@@ -30,12 +30,6 @@ struct BMPInfoHeader
 };
 #pragma pack(pop)
 
-// Scale meters to inches for us silly americans who measure rain in the imperial system
-double meter_to_inch(double meter)
-{
-    return meter * 39.3701;
-}
-
 // Writes a bitmap file (.bmp) into an output directory
 int write_bmp(const char *tif_filename, int width, int height, double *water_levels)
 {
