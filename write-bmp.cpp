@@ -5,6 +5,8 @@
 
 namespace fs = std::filesystem;
 
+double meter_to_inch(double meter);
+
 #pragma pack(push, 1)
 struct BMPFileHeader
 {

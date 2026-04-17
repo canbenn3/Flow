@@ -4,10 +4,25 @@
 #include <cstring>
 #include <omp.h>
 #include <chrono>
-#include "read-geo-data.cpp"
-#include "write-bmp.cpp"
-#include "write-jpg.cpp"
-#include "util.cpp"
+#include <iostream>
+#include <iomanip>
+#include <string>
+// #include "read-geo-data.cpp"
+// #include "write-bmp.cpp"
+// #include "write-jpg.cpp"
+// #include "util.cpp"
+
+// Forward Declarations: Tell the compiler these exist somewhere else
+struct GeoData
+{
+    double *elevations;
+    int width;
+    int height;
+};
+GeoData read_geo_data(const char *filename);
+double inch_to_meter(double inch);
+int write_jpg(const char *filename, int width, int height, double *data);
+int write_bmp(const char *filename, int width, int height, double *data);
 
 void timestep_forward(
     GridCell *precomputed_cell_geometry,
@@ -211,7 +226,6 @@ void usage()
 {
     std::cout << "USAGE: ./serial <thread_count> <elev.tif> <num_iter> <total_rainfall(inches)>\n";
 }
-
 
 int main(int argc, char *argv[])
 {

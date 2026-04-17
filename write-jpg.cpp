@@ -2,7 +2,9 @@
 #include "stb_image_write.h"
 #include <filesystem>
 #include <vector>
-#include "util.cpp"
+// #include "util.cpp"
+
+double meter_to_inch(double meter);
 
 namespace fs = std::filesystem;
 
