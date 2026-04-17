@@ -6,84 +6,72 @@
 #include "write-bmp.cpp"
 
 __global__ void timestep_forward_kernel(
-    GridCell *precomputed_cell_geometry,
+    double *water_surface_elevations,
     double *water_levels_in,
     double *water_levels_out,
-    int width,
-    int height,
+    int grid_width,
+    int grid_height,
     double dt
 )
 {
-    int x = blockDim.x * blockIdx.x + threadIdx.x;
-    int y = blockDim.y * blockIdx.y + threadIdx.y;
-
-    if (x >= width || y >= height) return;
-
-    double current_water = water_levels_in[y * width + x];
-
-    // Compute discharge using the new dt parameter
-    Discharge discharge = compute_discharge(
-        precomputed_cell_geometry[y * width + x],
-        current_water,
-        dt);
-
-    // Subtract the total water leaving this cell
-    double total_outflow = discharge.north + discharge.south + discharge.east + discharge.west;
-    water_levels_out[y * width + x] -= total_outflow;
-
-    // Distribute the outflow to the appropriate neighbors
-    int north_y = y - 1;
-    if (north_y >= 0)
-    {
-        water_levels_out[north_y * width + x] += discharge.north;
-    }
-
-    int east_x = x + 1;
-    if (east_x < width)
-    {
-        water_levels_out[y * width + east_x] += discharge.east;
-    }
-
-    int south_y = y + 1;
-    if (south_y < height)
-    {
-        water_levels_out[south_y * width + x] += discharge.south;
-    }
-
-    int west_x = x - 1;
-    if (west_x >= 0)
-    {
-        water_levels_out[y * width + west_x] += discharge.west;
-    }
-}
-
-__global__ void compute_grid_geometry_kernel(
-    double *elevations,
-    int elevations_width,
-    int elevations_height,
-    GridCell *geometry
-)
-{
-    int grid_width = elevations_width - 1;
-    int grid_height = elevations_height - 1;
+    int elevations_width = grid_width + 1;
+    int elevations_height = grid_height + 1;
 
     int x = blockDim.x * blockIdx.x + threadIdx.x;
     int y = blockDim.y * blockIdx.y + threadIdx.y;
 
     if (x < grid_width && y < grid_height)
     {
-        geometry[y * grid_width + x] = flow_vector_direction(
-            elevations[y * elevations_width + x],
-            elevations[y * elevations_width + x + 1],
-            elevations[(y + 1) * elevations_width + x + 1],
-            elevations[(y + 1) * elevations_width + x]);
+        GridCell cell_geometry = flow_vector_direction(
+            water_surface_elevations[y * elevations_width + x],
+            water_surface_elevations[y * elevations_width + x + 1],
+            water_surface_elevations[(y + 1) * elevations_width + x + 1],
+            water_surface_elevations[(y + 1) * elevations_width + x]
+        );
+
+        double current_water = water_levels_in[y * grid_width + x];
+
+        Discharge discharge = compute_discharge(
+            cell_geometry,
+            current_water,
+            dt
+        );
+
+        // Subtract the total water leaving this cell
+        double total_outflow = discharge.north + discharge.south + discharge.east + discharge.west;
+        water_levels_out[y * grid_width + x] -= total_outflow;
+
+        // Distribute the outflow to the appropriate neighbors
+        int north_y = y - 1;
+        if (north_y >= 0)
+        {
+            water_levels_out[north_y * grid_width + x] += discharge.north;
+        }
+
+        int east_x = x + 1;
+        if (east_x < grid_width)
+        {
+            water_levels_out[y * grid_width + east_x] += discharge.east;
+        }
+
+        int south_y = y + 1;
+        if (south_y < grid_height)
+        {
+            water_levels_out[south_y * grid_width + x] += discharge.south;
+        }
+
+        int west_x = x - 1;
+        if (west_x >= 0)
+        {
+            water_levels_out[y * grid_width + west_x] += discharge.west;
+        }
     }
 }
 
 __global__ void add_rain_kernel(
     double *water_levels,
-    int width,
-    int height,
+    int grid_width,
+    int grid_height,
     double rain
 )
 {
@@ -92,7 +80,7 @@ __global__ void add_rain_kernel(
 
     if (x < grid_width && y < grid_height)
     {
-        water_levels[y * width + x] += rain;
+        water_levels[y * grid_width + x] += rain;
     }
 }
 
@@ -105,14 +93,14 @@ __global__ void compute_water_surface_elevations_kernel(
     int elev_height
 )
 {
+    int grid_width = elev_width - 1;
+    int grid_height = elev_height - 1;
+
     int x = blockDim.x * blockIdx.x + threadIdx.x;
     int y = blockDim.y * blockIdx.y + threadIdx.y;
 
     if (x < elev_width && y < elev_height)
     {
-        int grid_width = elev_width - 1;
-        int grid_height = elev_height - 1;
-
         double total_water = 0.0;
         int cells_counted = 0;
 
@@ -146,19 +134,17 @@ __global__ void compute_water_surface_elevations_kernel(
 
         double avg_water_depth = (cells_counted > 0) ? (total_water / cells_counted) : 0.0;
 
-        // The new "terrain" the water sees is the actual dirt + the accumulated water
+        // // The new "terrain" the water sees is the actual dirt + the accumulated water
         surface_elevations_out[y * elev_width + x] = terrain_elevations[y * elev_width + x] + avg_water_depth;
     }
 }
 
-void run_simulation(
-    double *elevation,
-    double *surface_elevations,
-    double *a,
-    double *b,
-    int num_timesteps,
+int run_simulation(
+    double *elevations_in,
     int elev_width,
     int elev_height,
+    double *water_levels_out,
+    int num_timesteps,
     double dt,
     double total_rainfall_inches
 )
@@ -166,26 +152,73 @@ void run_simulation(
     int block_size_x = 32;
     int block_size_y = 32;
 
-    int cell_width = elev_width - 1;
-    int cell_height = elev_height - 1;
-
-    dim3 blocksPerElevationGrid(ceil(elev_width/(double)block_size_x), ceil(elev_height/(double)block_size_y));
-    dim3 blocksPerCellGrid(ceil(cell_width/(double)block_size_x), ceil(cell_height/(double)block_size_y));
-    dim3 threadsPerBlock(block_size_x, block_size_y);
+    int grid_width = elev_width - 1;
+    int grid_height = elev_height - 1;
 
     // Add water each timestep to simulate rainfall
     double rain_per_timestep = total_rainfall_inches / num_timesteps;
-    GridCell *geometry = (GridCell *)malloc(cell_width * cell_height * sizeof(GridCell));
+
+    double *elevations_d;
+    double *surface_elevations_d;
+    double *water_levels_a_d;
+    double *water_levels_b_d;
+
+    cudaError_t ret;
+    int elev_len = elev_width*elev_height*sizeof(double);
+    int grid_len = grid_width*grid_height*sizeof(double);
+
+    ret = cudaMalloc((void **) &elevations_d, elev_len);
+    if (ret != cudaSuccess) {
+        std::cerr << "Device memory allocation failed." << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    ret = cudaMemcpy(elevations_d, elevations_in, elev_len, cudaMemcpyHostToDevice);
+    if (ret != cudaSuccess) {
+        std::cerr << "Host to device memory copy failed." << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    ret = cudaMalloc((void **) &surface_elevations_d, elev_len);
+    if (ret != cudaSuccess) {
+        std::cerr << "Device memory allocation failed." << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    ret = cudaMalloc((void **) &water_levels_a_d, grid_len);
+    if (ret != cudaSuccess) {
+        std::cerr << "Device memory allocation failed." << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    ret = cudaMalloc((void **) &water_levels_b_d, grid_len);
+    if (ret != cudaSuccess) {
+        std::cerr << "Device memory allocation failed." << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    dim3 blocksPerElevationGrid(ceil(elev_width/(double)block_size_x), ceil(elev_height/(double)block_size_y));
+    dim3 blocksPerCellGrid(ceil(grid_width/(double)block_size_x), ceil(grid_height/(double)block_size_y));
+    dim3 threadsPerBlock(block_size_x, block_size_y);
+
     for (int i = 0; i < num_timesteps; i++)
     {
-        double *in = i % 2 == 0 ? a : b;
-        double *out = i % 2 == 0 ? b : a;
-        add_rain(in, cell_width, cell_height, rain_per_timestep);
-        compute_water_surface_elevations(elevation, in, surface_elevations, elev_width, elev_height);
-        compute_grid_geometry(surface_elevations, elev_width, elev_height, geometry);
-        timestep_forward(geometry, in, out, cell_width, cell_height, dt);
+        double *in = i % 2 == 0 ? water_levels_a_d : water_levels_b_d;
+        double *out = i % 2 == 0 ? water_levels_b_d : water_levels_a_d;
+
+        add_rain_kernel<<<blocksPerCellGrid, threadsPerBlock>>>(in, grid_width, grid_height, rain_per_timestep);
+        compute_water_surface_elevations_kernel<<<blocksPerElevationGrid, threadsPerBlock>>>(elevations_d, in, surface_elevations_d, elev_width, elev_height);
+        timestep_forward_kernel<<<blocksPerCellGrid, threadsPerBlock>>>(surface_elevations_d, in, out, grid_width, grid_height, dt);
     }
-    free(geometry);
+
+    double *result = (num_timesteps % 2 == 0) ? water_levels_a_d : water_levels_b_d;
+    ret = cudaMemcpy(water_levels_out, result, grid_len, cudaMemcpyDeviceToHost);
+    if (ret != cudaSuccess) {
+        std::cerr << "Device to host memory copy failed." << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    return EXIT_SUCCESS;
 }
 
 void usage()
@@ -212,38 +245,26 @@ int main(int argc, char *argv[])
         rain_inches_total = std::stod(argv[3]);
     }
 
-    auto [elevations, width, height] = read_geo_data(filename);
+    auto [elevations, elev_width, elev_height] = read_geo_data(filename);
     if (elevations == nullptr)
     {
-        return 1;
+        return EXIT_FAILURE;
     }
-
-    // Compute flow steepness and direction for each cell in grid
-    int grid_width = width - 1;
-    int grid_height = height - 1;
-
-    // Setup water grids
-    double *a = (double *)calloc(grid_width * grid_height, sizeof(double)); // calloc zeroes the memory
-    double *b = (double *)calloc(grid_width * grid_height, sizeof(double));
-
-    double *surface_elevations = (double *)malloc(width * height * sizeof(double));
+    int grid_width = elev_width - 1;
+    int grid_height = elev_height - 1;
 
     // Simulation Parameters
     double dt = 1; // Time step (seconds)
 
+    double *water_levels = (double *) malloc(grid_width*grid_height*sizeof(double));
+
     // Run the simulation
-    run_simulation(elevations, surface_elevations, a, b, num_timesteps, width, height, dt, inch_to_meter(rain_inches_total));
+    run_simulation(elevations, elev_width, elev_height, water_levels, num_timesteps, dt, inch_to_meter(rain_inches_total));
 
-    // If num_timesteps is even, 'a' holds the final state. If odd, 'b' holds it.
-    double *result = (num_timesteps % 2 == 0) ? a : b;
-
-    write_bmp(filename, grid_width, grid_height, result);
+    write_bmp(filename, grid_width, grid_height, water_levels);
 
     // Cleanup
-    free(a);
-    free(b);
-    free(surface_elevations);
-    free(elevations);
+    free(water_levels);
 
     return 0;
 }
