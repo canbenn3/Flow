@@ -211,8 +211,32 @@ int run_simulation(
         double *out = i % 2 == 0 ? water_levels_b_d : water_levels_a_d;
 
         add_rain_kernel<<<blocksPerCellGrid, threadsPerBlock>>>(in, grid_width, grid_height, rain_per_timestep);
+
+        ret = cudaDeviceSynchronize();
+        if (ret != cudaSuccess) {
+            fprintf(stderr, "CUDA synchronize failed; ret=%d\n", ret);
+            return EXIT_FAILURE;
+        }
+
         compute_water_surface_elevations_kernel<<<blocksPerElevationGrid, threadsPerBlock>>>(elevations_d, in, surface_elevations_d, elev_width, elev_height);
+
+        ret = cudaDeviceSynchronize();
+        if (ret != cudaSuccess) {
+            fprintf(stderr, "CUDA synchronize failed; ret=%d\n", ret);
+            return EXIT_FAILURE;
+        }
+
         timestep_forward_kernel<<<blocksPerCellGrid, threadsPerBlock>>>(surface_elevations_d, in, out, grid_width, grid_height, dt);
+
+        ret = cudaDeviceSynchronize();
+        if (ret != cudaSuccess) {
+            fprintf(stderr, "CUDA synchronize failed; ret=%d\n", ret);
+            return EXIT_FAILURE;
+        }
+
+        if (i % 10 == 0) {
+            fprintf(stderr, "Iteration %d\n", i);
+        }
     }
 
     double *result = (num_timesteps % 2 == 0) ? water_levels_a_d : water_levels_b_d;
@@ -256,6 +280,8 @@ int main(int argc, char *argv[])
     }
     int grid_width = elev_width - 1;
     int grid_height = elev_height - 1;
+
+    printf("Loaded geo data; %dx%d\n", elev_width, elev_height);
 
     // Simulation Parameters
     double dt = 1; // Time step (seconds)
