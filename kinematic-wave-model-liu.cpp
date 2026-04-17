@@ -7,7 +7,14 @@
  */
 
 #include <cmath>
-#include <algorithm> 
+#include <algorithm>
+
+// Allows this file to be used in CUDA kernels
+#ifdef __CUDACC__
+    #define HOST_DEVICE __host__ __device__
+#else
+    #define HOST_DEVICE
+#endif
 
 const double pi = 3.14159265358979323846;
 
@@ -25,7 +32,7 @@ struct Discharge {
     double west = 0.0;
 };
 
-GridCell flow_vector_direction(double northwest, double northeast, double southeast, double southwest) {
+HOST_DEVICE GridCell flow_vector_direction(double northwest, double northeast, double southeast, double southwest) {
     // See Figure 3b for corner mappings
     double z1 = northwest;
     double z2 = northeast;
@@ -51,7 +58,7 @@ GridCell flow_vector_direction(double northwest, double northeast, double southe
 }
 
 // 'dt' (time step) scales flow rates into volumes
-Discharge compute_discharge(GridCell cell, double cell_water_level, double dt) {
+HOST_DEVICE Discharge compute_discharge(GridCell cell, double cell_water_level, double dt) {
     // Calculate flow rate, then multiply by the time step (dt) to get the volume 
     // of water attempting to move during this iteration.
     double q_rate = (cell.theta / (pi / 2.0)) * cell_water_level;

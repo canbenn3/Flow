@@ -1,3 +1,8 @@
+/**
+ * read-geo-data.cpp equires C++17 or greater.
+ * Compile with `nvcc --std=c++17 cuda.cu -o cuda -lgdal -lstdc++fs`
+ */
+
 #include "kinematic-wave-model-liu.cpp"
 #include <cstdlib>
 #include <cstdio>
@@ -15,7 +20,6 @@ __global__ void timestep_forward_kernel(
 )
 {
     int elevations_width = grid_width + 1;
-    int elevations_height = grid_height + 1;
 
     int x = blockDim.x * blockIdx.x + threadIdx.x;
     int y = blockDim.y * blockIdx.y + threadIdx.y;
@@ -169,31 +173,31 @@ int run_simulation(
 
     ret = cudaMalloc((void **) &elevations_d, elev_len);
     if (ret != cudaSuccess) {
-        std::cerr << "Device memory allocation failed." << std::endl;
+        printf("Device memory allocation failed; ret=%d\n", ret);
         return EXIT_FAILURE;
     }
 
     ret = cudaMemcpy(elevations_d, elevations_in, elev_len, cudaMemcpyHostToDevice);
     if (ret != cudaSuccess) {
-        std::cerr << "Host to device memory copy failed." << std::endl;
+        printf("Host to device memory copy failed; ret=%d\n", ret);
         return EXIT_FAILURE;
     }
 
     ret = cudaMalloc((void **) &surface_elevations_d, elev_len);
     if (ret != cudaSuccess) {
-        std::cerr << "Device memory allocation failed." << std::endl;
+        printf("Device memory allocation failed; ret=%d\n", ret);
         return EXIT_FAILURE;
     }
 
     ret = cudaMalloc((void **) &water_levels_a_d, grid_len);
     if (ret != cudaSuccess) {
-        std::cerr << "Device memory allocation failed." << std::endl;
+        printf("Device memory allocation failed; ret=%d\n", ret);
         return EXIT_FAILURE;
     }
 
     ret = cudaMalloc((void **) &water_levels_b_d, grid_len);
     if (ret != cudaSuccess) {
-        std::cerr << "Device memory allocation failed." << std::endl;
+        printf("Device memory allocation failed; ret=%d\n", ret);
         return EXIT_FAILURE;
     }
 
@@ -214,7 +218,7 @@ int run_simulation(
     double *result = (num_timesteps % 2 == 0) ? water_levels_a_d : water_levels_b_d;
     ret = cudaMemcpy(water_levels_out, result, grid_len, cudaMemcpyDeviceToHost);
     if (ret != cudaSuccess) {
-        std::cerr << "Device to host memory copy failed." << std::endl;
+        printf("Device to host memory copy failed; ret=%d\n", ret);
         return EXIT_FAILURE;
     }
 
@@ -259,7 +263,10 @@ int main(int argc, char *argv[])
     double *water_levels = (double *) malloc(grid_width*grid_height*sizeof(double));
 
     // Run the simulation
-    run_simulation(elevations, elev_width, elev_height, water_levels, num_timesteps, dt, inch_to_meter(rain_inches_total));
+    int ret = run_simulation(elevations, elev_width, elev_height, water_levels, num_timesteps, dt, inch_to_meter(rain_inches_total));
+    if (ret != EXIT_SUCCESS) {
+        return EXIT_FAILURE;
+    }
 
     write_bmp(filename, grid_width, grid_height, water_levels);
 
