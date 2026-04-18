@@ -11,119 +11,6 @@
 #include "write-bmp.cpp"
 #include <mpi.h>
 
-int run_simulation(
-    double *elevations_in,
-    uint2 elev_dimens,
-    double *water_levels_out,
-    int num_timesteps,
-    double dt,
-    double total_rainfall_inches
-)
-{
-    int block_size_x = 32;
-    int block_size_y = 32;
-
-    uint2 grid_dimens = {
-        .x = elev_dimens.x - 1,
-        .y = elev_dimens.y - 1
-    };
-
-    // Add water each timestep to simulate rainfall
-    double rain_per_timestep = total_rainfall_inches / num_timesteps;
-
-    double *elevations_d;
-    double *surface_elevations_d;
-    double *water_levels_a_d;
-    double *water_levels_b_d;
-
-    cudaError_t ret;
-    int elev_len = elev_dimens.x*elev_dimens.y*sizeof(double);
-    int grid_len = grid_dimens.x*grid_dimens.y*sizeof(double);
-
-    ret = cudaMalloc((void **) &elevations_d, elev_len);
-    if (ret != cudaSuccess) {
-        printf("Device memory allocation failed; ret=%d\n", ret);
-        return EXIT_FAILURE;
-    }
-
-    ret = cudaMemcpy(elevations_d, elevations_in, elev_len, cudaMemcpyHostToDevice);
-    if (ret != cudaSuccess) {
-        printf("Host to device memory copy failed; ret=%d\n", ret);
-        return EXIT_FAILURE;
-    }
-
-    ret = cudaMalloc((void **) &surface_elevations_d, elev_len);
-    if (ret != cudaSuccess) {
-        printf("Device memory allocation failed; ret=%d\n", ret);
-        return EXIT_FAILURE;
-    }
-
-    ret = cudaMalloc((void **) &water_levels_a_d, grid_len);
-    if (ret != cudaSuccess) {
-        printf("Device memory allocation failed; ret=%d\n", ret);
-        return EXIT_FAILURE;
-    }
-
-    ret = cudaMalloc((void **) &water_levels_b_d, grid_len);
-    if (ret != cudaSuccess) {
-        printf("Device memory allocation failed; ret=%d\n", ret);
-        return EXIT_FAILURE;
-    }
-
-    dim3 blocksPerElevationGrid(ceil(elev_dimens.x/(double)block_size_x), ceil(elev_dimens.y/(double)block_size_y));
-    dim3 blocksPerCellGrid(ceil(grid_dimens.x/(double)block_size_x), ceil(grid_dimens.y/(double)block_size_y));
-    dim3 threadsPerBlock(block_size_x, block_size_y);
-
-    for (int i = 0; i < num_timesteps; i++)
-    {
-        double *in = i % 2 == 0 ? water_levels_a_d : water_levels_b_d;
-        double *out = i % 2 == 0 ? water_levels_b_d : water_levels_a_d;
-
-        add_rain_kernel<<<blocksPerCellGrid, threadsPerBlock>>>(
-            in, grid_dimens, rain_per_timestep
-        );
-
-        ret = cudaDeviceSynchronize();
-        if (ret != cudaSuccess) {
-            fprintf(stderr, "CUDA synchronize failed; ret=%d\n", ret);
-            return EXIT_FAILURE;
-        }
-
-        compute_water_surface_elevations_kernel<<<blocksPerElevationGrid, threadsPerBlock>>>(
-            elevations_d, elev_dimens, in, grid_dimens, surface_elevations_d
-        );
-
-        ret = cudaDeviceSynchronize();
-        if (ret != cudaSuccess) {
-            fprintf(stderr, "CUDA synchronize failed; ret=%d\n", ret);
-            return EXIT_FAILURE;
-        }
-
-        timestep_forward_kernel<<<blocksPerCellGrid, threadsPerBlock>>>(
-            surface_elevations_d, elev_dimens, in, out, grid_dimens, dt
-        );
-
-        ret = cudaDeviceSynchronize();
-        if (ret != cudaSuccess) {
-            fprintf(stderr, "CUDA synchronize failed; ret=%d\n", ret);
-            return EXIT_FAILURE;
-        }
-
-        if (i % 10 == 0) {
-            fprintf(stderr, "Iteration %d\n", i);
-        }
-    }
-
-    double *result = (num_timesteps % 2 == 0) ? water_levels_a_d : water_levels_b_d;
-    ret = cudaMemcpy(water_levels_out, result, grid_len, cudaMemcpyDeviceToHost);
-    if (ret != cudaSuccess) {
-        printf("Device to host memory copy failed; ret=%d\n", ret);
-        return EXIT_FAILURE;
-    }
-
-    return EXIT_SUCCESS;
-}
-
 void usage()
 {
     std::cout << "USAGE: ./cuda-distributed <elev.tif> <num_iter> <total_rainfall(inches)>\n";
@@ -138,6 +25,15 @@ int main(int argc, char *argv[])
     MPI_Comm_size(MPI_COMM_WORLD, &comm_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
+    char* filename;
+    int num_timesteps;
+    double total_rainfall_meters;
+    double* master_elevations = NULL;
+    unsigned int master_grid_width, master_grid_height, process_grid_height;
+    unsigned int master_elevations_len;
+    int offsets[comm_size];
+    int grid_rows[comm_size];
+
     if (rank == 0)
     {
         if (argc < 2)
@@ -145,8 +41,8 @@ int main(int argc, char *argv[])
             usage();
             return 1;
         }
-        char *filename = argv[1];
-        int num_timesteps = 1000; // defaults
+        filename = argv[1];
+        num_timesteps = 1000; // defaults
         double rain_inches_total = 1;
         if (argc > 2)
         {
@@ -156,43 +52,167 @@ int main(int argc, char *argv[])
         {
             rain_inches_total = std::stod(argv[3]);
         }
+        total_rainfall_meters = inch_to_meter(rain_inches_total);
+
 
         auto [elevations, elev_width, elev_height] = read_geo_data(filename);
-        if (elevations == nullptr)
+        if (elevations == NULL)
         {
             return EXIT_FAILURE;
         }
-        unsigned int grid_width = (unsigned int) elev_width - 1;
-        unsigned int grid_height = (unsigned int) elev_height - 1;
-        uint2 elev_dimens = {(unsigned int) elev_width, (unsigned int) elev_height};
+        master_elevations = elevations;
+
+        master_grid_width = (unsigned int) elev_width - 1;
+        master_grid_height = (unsigned int) elev_height - 1;
 
         printf("Loaded geo data; %dx%d\n", elev_width, elev_height);
 
-        
+        unsigned int grid_rows_per_process = master_grid_height / comm_size;
+
+        int offset_cursor = 0;
+        for (int i = 0; i < (comm_size - 1); i++) {
+            offsets[i] = offset_cursor;
+            grid_rows[i] = grid_rows_per_process;
+            offset_cursor += grid_rows_per_process;
+        }
+
+        // Last process takes the remaining data
+        offsets[comm_size - 1] = offset_cursor;
+        grid_rows[comm_size - 1] = master_grid_height - offset_cursor;
     }
 
-    // Simulation Parameters
-    double dt = 1; // Time step (seconds)
+    MPI_Bcast(&num_timesteps, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&total_rainfall_meters, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&master_grid_width, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&master_grid_height, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Scatter(grid_rows, 1, MPI_INT, &process_grid_height, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
-    double *water_levels = (double *) malloc(grid_width*grid_height*sizeof(double));
+    // Elevation map is divided along the y-axis
+    // Grid width is the same for all processes; height is different
+    uint2 grid_dimens = {master_grid_width, process_grid_height};
+    uint2 elev_dimens = {master_grid_width + 1, process_grid_height + 1};
 
-    // Run the simulation
-    int ret = run_simulation(
-        elevations,
-        elev_dimens,
-        water_levels,
-        num_timesteps,
-        dt,
-        inch_to_meter(rain_inches_total)
-    );
-    if (ret != EXIT_SUCCESS) {
+    // Allocate GPU memory
+
+    double *elevations_d;
+    double *surface_elevations_d;
+    double *water_levels_a_d;
+    double *water_levels_b_d;
+
+    cudaError_t ret;
+    int elev_len = elev_dimens.x*elev_dimens.y*sizeof(double);
+    int grid_len = grid_dimens.x*grid_dimens.y*sizeof(double);
+    int master_grid_len = master_grid_width*master_grid_height*sizeof(double);
+
+    ret = cudaMalloc((void **) &elevations_d, elev_len);
+    if (ret != cudaSuccess) {
+        printf("Device memory allocation failed; ret=%d\n", ret);
+        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
         return EXIT_FAILURE;
     }
 
-    write_bmp(filename, grid_width, grid_height, water_levels);
+    ret = cudaMalloc((void **) &surface_elevations_d, elev_len);
+    if (ret != cudaSuccess) {
+        printf("Device memory allocation failed; ret=%d\n", ret);
+        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+        return EXIT_FAILURE;
+    }
 
-    // Cleanup
-    free(water_levels);
+    ret = cudaMalloc((void **) &water_levels_a_d, grid_len);
+    if (ret != cudaSuccess) {
+        printf("Device memory allocation failed; ret=%d\n", ret);
+        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+        return EXIT_FAILURE;
+    }
+
+    ret = cudaMalloc((void **) &water_levels_b_d, grid_len);
+    if (ret != cudaSuccess) {
+        printf("Device memory allocation failed; ret=%d\n", ret);
+        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+        return EXIT_FAILURE;
+    }
+
+    // Distribute sections of the elevation map to each node
+
+    if (rank == 0) {
+        for (int i = 0; i < comm_size; i++) {
+            int elev_offset = offsets[i] * elev_dimens.x;
+            int elev_len = (grid_rows[i] + 1) * elev_dimens.x;
+            MPI_Request req;
+            MPI_Isend(master_elevations + elev_offset, elev_len, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, &req);
+            // Can safely discard the request handle; master_elevations remains
+            // in memory for lifetime of the program
+            MPI_Request_free(&req);
+        }
+    }
+    MPI_Recv(elevations_d, elev_len, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+    // Run the simulation on the GPU
+
+    int block_size_x = 32;
+    int block_size_y = 32;
+    double dt = 1;
+
+    dim3 blocksPerElevationGrid(ceil(elev_dimens.x/(double)block_size_x), ceil(elev_dimens.y/(double)block_size_y));
+    dim3 blocksPerCellGrid(ceil(grid_dimens.x/(double)block_size_x), ceil(grid_dimens.y/(double)block_size_y));
+    dim3 threadsPerBlock(block_size_x, block_size_y);
+
+    double rain_per_timestep = total_rainfall_meters / num_timesteps;
+
+    for (int i = 0; i < num_timesteps; i++)
+    {
+        double *in = i % 2 == 0 ? water_levels_a_d : water_levels_b_d;
+        double *out = i % 2 == 0 ? water_levels_b_d : water_levels_a_d;
+
+        add_rain_kernel<<<blocksPerCellGrid, threadsPerBlock>>>(
+            in, grid_dimens, rain_per_timestep
+        );
+
+        ret = cudaDeviceSynchronize();
+        if (ret != cudaSuccess) {
+            fprintf(stderr, "CUDA synchronize failed; ret=%d\n", ret);
+            MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+            return EXIT_FAILURE;
+        }
+
+        compute_water_surface_elevations_kernel<<<blocksPerElevationGrid, threadsPerBlock>>>(
+            elevations_d, elev_dimens, in, grid_dimens, surface_elevations_d
+        );
+
+        ret = cudaDeviceSynchronize();
+        if (ret != cudaSuccess) {
+            fprintf(stderr, "CUDA synchronize failed; ret=%d\n", ret);
+            MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+            return EXIT_FAILURE;
+        }
+
+        timestep_forward_kernel<<<blocksPerCellGrid, threadsPerBlock>>>(
+            surface_elevations_d, elev_dimens, in, out, grid_dimens, dt
+        );
+
+        ret = cudaDeviceSynchronize();
+        if (ret != cudaSuccess) {
+            fprintf(stderr, "CUDA synchronize failed; ret=%d\n", ret);
+            MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+            return EXIT_FAILURE;
+        }
+
+        if (i % 10 == 0) {
+            fprintf(stderr, "Iteration %d\n", i);
+        }
+    }
+
+    double *result = (num_timesteps % 2 == 0) ? water_levels_a_d : water_levels_b_d;
+    double *water_levels = NULL;
+    if (rank == 0) {
+        water_levels = (double *) malloc(master_grid_len);
+    }
+    MPI_Gather(result, grid_len, MPI_DOUBLE, water_levels, master_grid_len, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+
+    if (rank == 0) {
+        write_bmp(filename, master_grid_width, master_grid_height, water_levels);
+        free(water_levels);
+    }
 
     MPI_Finalize();
 

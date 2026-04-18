@@ -16,7 +16,7 @@ int run_simulation(
     double *water_levels_out,
     int num_timesteps,
     double dt,
-    double total_rainfall_inches
+    double total_rainfall_meters
 )
 {
     int block_size_x = 32;
@@ -28,7 +28,7 @@ int run_simulation(
     };
 
     // Add water each timestep to simulate rainfall
-    double rain_per_timestep = total_rainfall_inches / num_timesteps;
+    double rain_per_timestep = total_rainfall_meters / num_timesteps;
 
     double *elevations_d;
     double *surface_elevations_d;
