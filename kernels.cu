@@ -1,8 +1,3 @@
-/**
- * read-geo-data.cpp equires C++17 or greater.
- * Compile with `nvcc --std=c++17 cuda.cu -o cuda -lgdal -lstdc++fs`
- */
-
 #include "kinematic-wave-model-liu.cpp"
 #include <cstdlib>
 
