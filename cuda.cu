@@ -11,11 +11,11 @@
 #include "write-bmp.cpp"
 
 __device__ Discharge compute_discharge_for_cell(
-    int2 pos,
+    uint2 pos,
     double *water_surface_elevations,
-    int2 elev_dimens,
+    uint2 elev_dimens,
     double *water_levels,
-    int2 grid_dimens,
+    uint2 grid_dimens,
     double dt
 )
 {
@@ -39,14 +39,14 @@ __device__ Discharge compute_discharge_for_cell(
 
 __global__ void timestep_forward_kernel(
     double *water_surface_elevations,
-    int2 elev_dimens,
+    uint2 elev_dimens,
     double *water_levels_in,
     double *water_levels_out,
-    int2 grid_dimens,
+    uint2 grid_dimens,
     double dt
 )
 {
-    int2 pos = {
+    uint2 pos = {
         .x = blockDim.x * blockIdx.x + threadIdx.x,
         .y = blockDim.y * blockIdx.y + threadIdx.y
     };
@@ -61,34 +61,37 @@ __global__ void timestep_forward_kernel(
             
             // Ignore corners and center
             if ((del_x == 0) ^ (del_y == 0)) {
-                int2 neighbor_pos = {pos.x+del_x, pos.y+del_y};
-                Discharge neighbor_discharge = compute_discharge_for_cell(
-                    neighbor_pos,
-                    water_surface_elevations,
-                    elev_dimens,
-                    water_levels_in,
-                    grid_dimens,
-                    dt
-                );
+                uint2 neighbor_pos = {pos.x+del_x, pos.y+del_y};
+                if (neighbor_pos.x < grid_dimens.x && neighbor_pos.y < grid_dimens.y)
+                {
+                    Discharge neighbor_discharge = compute_discharge_for_cell(
+                        neighbor_pos,
+                        water_surface_elevations,
+                        elev_dimens,
+                        water_levels_in,
+                        grid_dimens,
+                        dt
+                    );
 
-                // North neighbor: south discharge flows into cell
-                if (del_y == -1) {
-                    inflow += neighbor_discharge.south;
-                }
+                    // North neighbor: south discharge flows into cell
+                    if (del_y == -1) {
+                        inflow += neighbor_discharge.south;
+                    }
 
-                // East neighbor: west discharge flows into cell
-                if (del_x == 1) {
-                    inflow += neighbor_discharge.west;
-                }
+                    // East neighbor: west discharge flows into cell
+                    if (del_x == 1) {
+                        inflow += neighbor_discharge.west;
+                    }
 
-                // South neighbor: north discharge flows into cell
-                if (del_y == 1) {
-                    inflow += neighbor_discharge.north;
-                }
+                    // South neighbor: north discharge flows into cell
+                    if (del_y == 1) {
+                        inflow += neighbor_discharge.north;
+                    }
 
-                // West neighbor: east discharge flows into cell
-                if (del_x == -1) {
-                    inflow += neighbor_discharge.east;
+                    // West neighbor: east discharge flows into cell
+                    if (del_x == -1) {
+                        inflow += neighbor_discharge.east;
+                    }
                 }
             }
         }
@@ -110,11 +113,11 @@ __global__ void timestep_forward_kernel(
 
 __global__ void add_rain_kernel(
     double *water_levels,
-    int2 grid_dimens,
+    uint2 grid_dimens,
     double rain
 )
 {
-    int2 pos = {
+    uint2 pos = {
         .x = blockDim.x * blockIdx.x + threadIdx.x,
         .y = blockDim.y * blockIdx.y + threadIdx.y
     };
@@ -128,13 +131,13 @@ __global__ void add_rain_kernel(
 // A helper function to run at the start of every timestep
 __global__ void compute_water_surface_elevations_kernel(
     double *terrain_elevations,
-    int2 elev_dimens,
+    uint2 elev_dimens,
     double *water_levels,
-    int2 grid_dimens,
+    uint2 grid_dimens,
     double *surface_elevations_out
 )
 {
-    int2 pos = {
+    uint2 pos = {
         .x = blockDim.x * blockIdx.x + threadIdx.x,
         .y = blockDim.y * blockIdx.y + threadIdx.y
     };
@@ -181,7 +184,7 @@ __global__ void compute_water_surface_elevations_kernel(
 
 int run_simulation(
     double *elevations_in,
-    int2 elev_dimens,
+    uint2 elev_dimens,
     double *water_levels_out,
     int num_timesteps,
     double dt,
@@ -191,7 +194,7 @@ int run_simulation(
     int block_size_x = 32;
     int block_size_y = 32;
 
-    int2 grid_dimens = {
+    uint2 grid_dimens = {
         .x = elev_dimens.x - 1,
         .y = elev_dimens.y - 1
     };
@@ -321,9 +324,9 @@ int main(int argc, char *argv[])
     {
         return EXIT_FAILURE;
     }
-    int grid_width = elev_width - 1;
-    int grid_height = elev_height - 1;
-    int2 elev_dimens = {elev_width, elev_height};
+    unsigned int grid_width = (unsigned int) elev_width - 1;
+    unsigned int grid_height = (unsigned int) elev_height - 1;
+    uint2 elev_dimens = {(unsigned int) elev_width, (unsigned int) elev_height};
 
     printf("Loaded geo data; %dx%d\n", elev_width, elev_height);
 
