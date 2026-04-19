@@ -1,7 +1,7 @@
 /**
  * read-geo-data.cpp equires C++17 or greater.
+ * Configure environment with `module load cuda/11.8.0 openmpi/4.1.6-gpu gdal && export OMPI_MCA_opal_cuda_support=1 && ulimit -l unlimited`
  * Compile with `nvcc -c --std=c++17 cuda-distributed.cu -o cuda-distributed.o && mpicxx cuda-distributed.o -o cuda-distributed -lcudart -lgdal -lstdc++fs`
- * Must run `ulimit -l unlimited` prior to running with `mpiexec` to allow RDMA adapters to initialize properly
  */
 
 #include "kernels.cu"
