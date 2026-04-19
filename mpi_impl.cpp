@@ -193,7 +193,6 @@ void halo_exchange
 )
 {   
     //calculate pointers for various parts of the water_levels given local rows and such. 
-    //naive calculate, becuase extra logic kinda doesn't add much. if top_ghost_row = ownded start, there is other logic we can do. 
     double *top_ghost_row = water_levels;
     double *owned_start_row = water_levels + owned_grid_offset;
     
@@ -207,7 +206,7 @@ void halo_exchange
     //exchange logic
     if(rank != 0)
     {
-        //exchange top ghost rows with nieghbor. Using MPI_Sendrecv to avoid deadlocks
+        //exchange top ghost row with top neighbor. Using MPI_Sendrecv to avoid deadlocks
         MPI_Sendrecv(
             owned_start_row,
             grid_width,
@@ -226,7 +225,7 @@ void halo_exchange
 
     if(rank != comm_sz - 1)
     {
-        //exchange bottom ghost rows. using MPI_Sendrecv to avoid deadlocks
+        //exchange bottom ghost row with bottom neighbor. using MPI_Sendrecv to avoid deadlocks
         MPI_Sendrecv(
             owned_end_row,
             grid_width,
@@ -270,10 +269,6 @@ void run_simulation(
     {
         top_ghost_row = 1;
     }
-    if (rank != p - 1)
-    {
-        bottom_ghost_row = 1;
-    }
 
     //find grid offset for ghost rows
     int owned_grid_offset = top_ghost_row * grid_width;
@@ -290,7 +285,7 @@ void run_simulation(
 
         add_rain(owned_in, grid_width, local_rows, rain_per_timestep);
 
-        //halo exchange
+        halo_exchange(in, grid_width, local_rows, rank, p, owned_grid_offset);
 
         compute_water_surface_elevations(elevation, owned_in, surface_elevations, elev_width, elev_height);
         compute_grid_geometry(surface_elevations, elev_width, elev_height, geometry);
