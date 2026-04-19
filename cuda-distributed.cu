@@ -80,6 +80,13 @@ int main(int argc, char *argv[])
         // Last process takes the remaining data
         offsets[comm_size - 1] = offset_cursor;
         grid_rows[comm_size - 1] = master_grid_height - offset_cursor;
+
+        // Adjust boundaries so that they overlap (halos)
+        for (int i = 0; i < (comm_size - 1); i++) {
+            grid_rows[i] += 1;
+            offsets[i + 1] -= 1;
+            grid_rows[i + 1] += 1;
+        }
     }
 
     MPI_Bcast(&num_timesteps, 1, MPI_INT, 0, MPI_COMM_WORLD);
@@ -93,6 +100,24 @@ int main(int argc, char *argv[])
     uint2 grid_dimens = {master_grid_width, process_grid_height};
     uint2 elev_dimens = {master_grid_width + 1, process_grid_height + 1};
 
+    uint2 grid_dimens_with_halo = grid_dimens;
+    uint2 elev_dimens_with_halo = elev_dimens;
+
+    int rank_above = rank - 1;
+    int rank_below = rank + 1;
+    int padding_above = 0;
+
+    if (rank_above >= 0) {
+        grid_dimens_with_halo.y += 1;
+        elev_dimens_with_halo.y += 1;
+        padding_above = 1;
+    }
+
+    if (rank_below < comm_size) {
+        grid_dimens_with_halo.y += 1;
+        elev_dimens_with_halo.y += 1;
+    }
+
     // Allocate GPU memory
 
     double *elevations_d;
@@ -103,30 +128,32 @@ int main(int argc, char *argv[])
     cudaError_t ret;
     int elev_len = elev_dimens.x*elev_dimens.y*sizeof(double);
     int grid_len = grid_dimens.x*grid_dimens.y*sizeof(double);
+    int elev_len_with_halo = elev_dimens_with_halo.x*elev_dimens_with_halo.y*sizeof(double);
+    int grid_len_with_halo = grid_dimens_with_halo.x*grid_dimens_with_halo.y*sizeof(double);
     int master_grid_len = master_grid_width*master_grid_height*sizeof(double);
 
-    ret = cudaMalloc((void **) &elevations_d, elev_len);
+    ret = cudaMalloc((void **) &elevations_d, elev_len_with_halo);
     if (ret != cudaSuccess) {
         fprintf(stderr, "Device memory allocation failed; ret=%d\n", ret);
         MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
         return EXIT_FAILURE;
     }
 
-    ret = cudaMalloc((void **) &surface_elevations_d, elev_len);
+    ret = cudaMalloc((void **) &surface_elevations_d, elev_len_with_halo);
     if (ret != cudaSuccess) {
         fprintf(stderr, "Device memory allocation failed; ret=%d\n", ret);
         MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
         return EXIT_FAILURE;
     }
 
-    ret = cudaMalloc((void **) &water_levels_a_d, grid_len);
+    ret = cudaMalloc((void **) &water_levels_a_d, grid_len_with_halo);
     if (ret != cudaSuccess) {
         fprintf(stderr, "Device memory allocation failed; ret=%d\n", ret);
         MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
         return EXIT_FAILURE;
     }
 
-    ret = cudaMalloc((void **) &water_levels_b_d, grid_len);
+    ret = cudaMalloc((void **) &water_levels_b_d, grid_len_with_halo);
     if (ret != cudaSuccess) {
         fprintf(stderr, "Device memory allocation failed; ret=%d\n", ret);
         MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
@@ -146,7 +173,7 @@ int main(int argc, char *argv[])
             MPI_Request_free(&req);
         }
     }
-    MPI_Recv(elevations_d, elev_len, MPI_BYTE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    MPI_Recv(elevations_d, elev_len_with_halo, MPI_BYTE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     printf("Received elevation map data\n");
 
     // Run the simulation on the GPU
@@ -171,6 +198,27 @@ int main(int argc, char *argv[])
             fprintf(stderr, "CUDA memcpy failed; ret=%d\n", ret);
             return EXIT_FAILURE;
         }
+
+        if (rank_above >= 0) {
+            MPI_Request req;
+            MPI_Isend(in + grid_dimens_with_halo.x, grid_dimens_with_halo.x, MPI_DOUBLE, rank_above, 0, MPI_COMM_WORLD, &req);
+            MPI_Request_free(&req);
+        }
+
+        MPI_Barrier(MPI_COMM_WORLD);
+
+        if (rank_below < comm_size) {
+            MPI_Request req;
+            MPI_Isend(in + (grid_dimens_with_halo.y - 2) * grid_dimens_with_halo.x, grid_dimens_with_halo.x, MPI_DOUBLE, rank_below, 0, MPI_COMM_WORLD, &req);
+            MPI_Request_free(&req);
+            MPI_Recv(in + (grid_dimens_with_halo.y - 1) * grid_dimens_with_halo.x, grid_dimens_with_halo.x, MPI_DOUBLE, rank_below, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        }
+
+        if (rank_above >= 0) {
+            MPI_Recv(in, grid_dimens_with_halo.x, MPI_DOUBLE, rank_above, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        }
+
+        MPI_Barrier(MPI_COMM_WORLD);
 
         add_rain_kernel<<<blocksPerCellGrid, threadsPerBlock>>>(
             in, grid_dimens, rain_per_timestep
@@ -205,7 +253,7 @@ int main(int argc, char *argv[])
             return EXIT_FAILURE;
         }
 
-        if (i % 10 == 0) {
+        if (rank == 0 && i % 10 == 0) {
             printf("Iteration %d\n", i);
         }
     }
@@ -215,7 +263,7 @@ int main(int argc, char *argv[])
     if (rank == 0) {
         water_levels = (double *) malloc(master_grid_len);
     }
-    MPI_Gather(result, grid_len, MPI_BYTE, water_levels, master_grid_len, MPI_BYTE, 0, MPI_COMM_WORLD);
+    MPI_Gather(result + padding_above * grid_dimens_with_halo.x, grid_len, MPI_BYTE, water_levels, master_grid_len, MPI_BYTE, 0, MPI_COMM_WORLD);
 
     if (rank == 0) {
         write_bmp(filename, master_grid_width, master_grid_height, water_levels);
