@@ -1,6 +1,7 @@
 /**
  * read-geo-data.cpp equires C++17 or greater.
  * Compile with `nvcc --std=c++17 cuda.cu -o cuda -lgdal -lstdc++fs`
+ * after `module load cuda gdal`
  */
 
 #include "kernels.cu"
@@ -41,31 +42,31 @@ int run_simulation(
 
     ret = cudaMalloc((void **) &elevations_d, elev_len);
     if (ret != cudaSuccess) {
-        printf("Device memory allocation failed; ret=%d\n", ret);
+        fprintf(stderr, "Device memory allocation failed; ret=%d\n", ret);
         return EXIT_FAILURE;
     }
 
     ret = cudaMemcpy(elevations_d, elevations_in, elev_len, cudaMemcpyHostToDevice);
     if (ret != cudaSuccess) {
-        printf("Host to device memory copy failed; ret=%d\n", ret);
+        fprintf(stderr, "Host to device memory copy failed; ret=%d\n", ret);
         return EXIT_FAILURE;
     }
 
     ret = cudaMalloc((void **) &surface_elevations_d, elev_len);
     if (ret != cudaSuccess) {
-        printf("Device memory allocation failed; ret=%d\n", ret);
+        fprintf(stderr, "Device memory allocation failed; ret=%d\n", ret);
         return EXIT_FAILURE;
     }
 
     ret = cudaMalloc((void **) &water_levels_a_d, grid_len);
     if (ret != cudaSuccess) {
-        printf("Device memory allocation failed; ret=%d\n", ret);
+        fprintf(stderr, "Device memory allocation failed; ret=%d\n", ret);
         return EXIT_FAILURE;
     }
 
     ret = cudaMalloc((void **) &water_levels_b_d, grid_len);
     if (ret != cudaSuccess) {
-        printf("Device memory allocation failed; ret=%d\n", ret);
+        fprintf(stderr, "Device memory allocation failed; ret=%d\n", ret);
         return EXIT_FAILURE;
     }
 
@@ -77,6 +78,12 @@ int run_simulation(
     {
         double *in = i % 2 == 0 ? water_levels_a_d : water_levels_b_d;
         double *out = i % 2 == 0 ? water_levels_b_d : water_levels_a_d;
+
+        ret = cudaMemcpy(out, in, grid_len, cudaMemcpyDeviceToDevice);
+        if (ret != cudaSuccess) {
+            fprintf(stderr, "CUDA memcpy failed; ret=%d\n", ret);
+            return EXIT_FAILURE;
+        }
 
         add_rain_kernel<<<blocksPerCellGrid, threadsPerBlock>>>(
             in, grid_dimens, rain_per_timestep
@@ -109,14 +116,14 @@ int run_simulation(
         }
 
         if (i % 10 == 0) {
-            fprintf(stderr, "Iteration %d\n", i);
+            printf("Iteration %d\n", i);
         }
     }
 
     double *result = (num_timesteps % 2 == 0) ? water_levels_a_d : water_levels_b_d;
     ret = cudaMemcpy(water_levels_out, result, grid_len, cudaMemcpyDeviceToHost);
     if (ret != cudaSuccess) {
-        printf("Device to host memory copy failed; ret=%d\n", ret);
+        fprintf(stderr, "Device to host memory copy failed; ret=%d\n", ret);
         return EXIT_FAILURE;
     }
 
