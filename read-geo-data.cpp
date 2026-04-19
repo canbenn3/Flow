@@ -11,7 +11,7 @@ struct GeoData
     int height;
 };
 
-GeoData read_geo_data(char *filename_read)
+GeoData read_geo_data(const char *filename_read)
 {
     GDALAllRegister();
     fs::path p(filename_read);

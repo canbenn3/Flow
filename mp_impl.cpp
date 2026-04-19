@@ -272,7 +272,7 @@ int main(int argc, char *argv[])
     run_simulation(elevations, surface_elevations, a, b, num_timesteps, width, height, dt, inch_to_meter(rain_inches_total), thread_count);
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = end_time - start_time;
-    std::cout << "Simulation completed in " << diff.count() << " seconds." << std::endl;
+    std::cout << filename << " completed in " << diff.count() << " seconds with " << thread_count << " threads." << std::endl;
 
     // If num_timesteps is even, 'a' holds the final state. If odd, 'b' holds it.
     double *result = (num_timesteps % 2 == 0) ? a : b;
