@@ -28,7 +28,6 @@ void timestep_forward(
     double *water_levels_out, //owned region only,
     int width,
     int height, //of local owned slice - does not count ghost rows,
-    int owned_grid_offset,
     int top_ghost_row_count, 
     int bottom_ghost_row_count,
     double dt // timestep
@@ -62,7 +61,7 @@ void timestep_forward(
                         double current_water = water_levels_in[(in_y + del_y) * width + (x + del_x)];
 
                         Discharge neighbor_discharge = compute_discharge(
-                            precomputed_cell_geometry[(y + del_y) * width + (x + del_x)],
+                            precomputed_cell_geometry[(in_y + del_y) * width + (x + del_x)],
                             current_water,
                             dt);
 
@@ -93,7 +92,7 @@ void timestep_forward(
                 }
             }
             Discharge own_discharge = compute_discharge(
-                precomputed_cell_geometry[y * width + x],
+                precomputed_cell_geometry[in_y * width + x],
                 water_levels_in[in_y * width + x],
                 dt);
             // Subtract the total water leaving this cell
@@ -328,7 +327,6 @@ void run_simulation(
     double dt, // Added time step
     double total_rainfall_inches,
     int local_rows,
-    int start_row,
     int rank,
     int p)
 {
@@ -369,7 +367,7 @@ void run_simulation(
 
         //once we know the grid geometry, we must echange top and bottom rows of the owned slices
         halo_exchange_geometry(geometry, grid_width, local_rows, rank, p, owned_grid_offset);
-        timestep_forward(geometry, in, owned_out, grid_width, local_rows, owned_grid_offset, top_ghost_row_count, bottom_ghost_row_count, dt);
+        timestep_forward(geometry, in, owned_out, grid_width, local_rows, top_ghost_row_count, bottom_ghost_row_count, dt);
     }
     free(geometry);
 }
@@ -496,13 +494,11 @@ int main(int argc, char *argv[])
         terrianDisplacements[r] = start_row_r * width;
     }
 
-    //find grid local_rows, start_row
-    int local_rows = gridSendCounts[my_rank] / grid_width; //handles overflow in case grid_height % comm_sz != 0
-    int start_row = gridDisplacements[my_rank] / grid_width;
+    //find grid local_rows
+    int local_rows = gridSendCounts[my_rank] / grid_width; //handles overflow in case grid_height % comm_sz != 0;
 
      //find terian local rows because we need more rows and items per row for terrian arrays, cause they are 1 bigger. 
     int terrian_local_rows = local_rows + 1;
-    int terrian_start_row = terrianDisplacements[my_rank] / width;
 
 
     //calculate if grid rank needs 0, 1 or 2 ghost rows
@@ -553,7 +549,7 @@ int main(int argc, char *argv[])
 
     // Run the simulation
     auto start_time = std::chrono::high_resolution_clock::now();
-    run_simulation(local_elevations, local_surface_elevations, local_a, local_b, num_timesteps, width, terrian_local_rows, dt, inch_to_meter(rain_inches_total), local_rows, start_row, my_rank, comm_sz);
+    run_simulation(local_elevations, local_surface_elevations, local_a, local_b, num_timesteps, width, terrian_local_rows, dt, inch_to_meter(rain_inches_total), local_rows, my_rank, comm_sz);
     
     //gather local a and local b into a and b
     double *local_result = (num_timesteps % 2 == 0) ? local_a : local_b;
