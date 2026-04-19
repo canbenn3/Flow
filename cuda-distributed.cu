@@ -12,6 +12,8 @@
 #include "write-bmp.cpp"
 #include <mpi.h>
 
+#define USE_HOST_COPYBACK_BUF
+
 void usage()
 {
     std::cout << "USAGE: ./cuda-distributed <elev.tif> <num_iter> <total_rainfall(inches)>\n";
@@ -262,9 +264,39 @@ int main(int argc, char *argv[])
     double *water_levels = NULL;
     if (rank == 0) {
         water_levels = (double *) malloc(master_grid_len);
+        if (water_levels == NULL) {
+            fprintf(stderr, "Unable to allocate result buffer on host\n", ret);
+            MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+            return EXIT_FAILURE;
+        }
     }
+
     double *result_offset_from_halo = result + (padding_above * grid_dimens_with_halo.x);
+
+    #ifndef USE_HOST_COPYBACK_BUF
     MPI_Gather(result_offset_from_halo, grid_len, MPI_BYTE, water_levels, master_grid_len, MPI_BYTE, 0, MPI_COMM_WORLD);
+    #endif
+
+    #ifdef USE_HOST_COPYBACK_BUF
+
+    double *water_levels_partial = (double *) malloc(grid_len);
+    if (water_levels_partial == NULL) {
+        fprintf(stderr, "Unable to allocate copyback buffer on host\n", ret);
+        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+        return EXIT_FAILURE;
+    }
+
+    ret = cudaMemcpy(water_levels_partial, result_offset_from_halo, grid_len, cudaMemcpyDeviceToHost);
+    if (ret != cudaSuccess) {
+        fprintf(stderr, "Device to host memory copy failed; ret=%d\n", ret);
+        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+        return EXIT_FAILURE;
+    }
+
+    MPI_Gather(water_levels_partial, grid_len, MPI_BYTE, water_levels, master_grid_len, MPI_BYTE, 0, MPI_COMM_WORLD);
+    free(water_levels_partial);
+    
+    #endif
 
     if (rank == 0) {
         write_bmp(filename, master_grid_width, master_grid_height, water_levels);
