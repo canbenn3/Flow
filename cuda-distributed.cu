@@ -164,13 +164,17 @@ int main(int argc, char *argv[])
             int elev_len = (grid_rows[i] + 1) * elev_dimens_with_halo.x * sizeof(double);
             MPI_Request req;
             MPI_Isend(master_elevations + elev_offset, elev_len, MPI_BYTE, i, 0, MPI_COMM_WORLD, &req);
-            // Can safely discard the request handle; master_elevations remains
-            // in memory for lifetime of the program
             MPI_Request_free(&req);
         }
     }
     MPI_Recv(elevations_d, elev_len_with_halo, MPI_BYTE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     printf("Received elevation map data\n");
+
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    if (rank == 0) {
+        free(master_elevations);
+    }
 
     // Run the simulation on the GPU
 
