@@ -97,25 +97,22 @@ int main(int argc, char *argv[])
 
     // Elevation map is divided along the y-axis
     // Grid width is the same for all processes; height is different
-    uint2 grid_dimens = {master_grid_width, process_grid_height};
-    uint2 elev_dimens = {master_grid_width + 1, process_grid_height + 1};
+    uint2 grid_dimens_with_halo = {master_grid_width, process_grid_height};
+    uint2 elev_dimens_with_halo = {master_grid_width + 1, process_grid_height + 1};
 
-    uint2 grid_dimens_with_halo = grid_dimens;
-    uint2 elev_dimens_with_halo = elev_dimens;
+    uint2 grid_dimens = grid_dimens_with_halo;
 
     int rank_above = rank - 1;
     int rank_below = rank + 1;
     int padding_above = 0;
 
     if (rank_above >= 0) {
-        grid_dimens_with_halo.y += 1;
-        elev_dimens_with_halo.y += 1;
+        grid_dimens.y -= 1;
         padding_above = 1;
     }
 
     if (rank_below < comm_size) {
-        grid_dimens_with_halo.y += 1;
-        elev_dimens_with_halo.y += 1;
+        grid_dimens.y -= 1;
     }
 
     // Allocate GPU memory
@@ -163,8 +160,8 @@ int main(int argc, char *argv[])
 
     if (rank == 0) {
         for (int i = 0; i < comm_size; i++) {
-            int elev_offset = offsets[i] * elev_dimens.x;
-            int elev_len = (grid_rows[i] + 1) * elev_dimens.x * sizeof(double);
+            int elev_offset = offsets[i] * elev_dimens_with_halo.x;
+            int elev_len = (grid_rows[i] + 1) * elev_dimens_with_halo.x * sizeof(double);
             MPI_Request req;
             MPI_Isend(master_elevations + elev_offset, elev_len, MPI_BYTE, i, 0, MPI_COMM_WORLD, &req);
             // Can safely discard the request handle; master_elevations remains
@@ -181,8 +178,8 @@ int main(int argc, char *argv[])
     int block_size_y = 32;
     double dt = 1;
 
-    dim3 blocksPerElevationGrid(ceil(elev_dimens.x/(double)block_size_x), ceil(elev_dimens.y/(double)block_size_y));
-    dim3 blocksPerCellGrid(ceil(grid_dimens.x/(double)block_size_x), ceil(grid_dimens.y/(double)block_size_y));
+    dim3 blocksPerElevationGrid(ceil(elev_dimens_with_halo.x/(double)block_size_x), ceil(elev_dimens_with_halo.y/(double)block_size_y));
+    dim3 blocksPerCellGrid(ceil(grid_dimens_with_halo.x/(double)block_size_x), ceil(grid_dimens_with_halo.y/(double)block_size_y));
     dim3 threadsPerBlock(block_size_x, block_size_y);
 
     double rain_per_timestep = total_rainfall_meters / num_timesteps;
@@ -220,7 +217,7 @@ int main(int argc, char *argv[])
         MPI_Barrier(MPI_COMM_WORLD);
 
         add_rain_kernel<<<blocksPerCellGrid, threadsPerBlock>>>(
-            in, grid_dimens, rain_per_timestep
+            in, grid_dimens_with_halo, rain_per_timestep
         );
 
         ret = cudaDeviceSynchronize();
@@ -231,7 +228,7 @@ int main(int argc, char *argv[])
         }
 
         compute_water_surface_elevations_kernel<<<blocksPerElevationGrid, threadsPerBlock>>>(
-            elevations_d, elev_dimens, in, grid_dimens, surface_elevations_d
+            elevations_d, elev_dimens_with_halo, in, grid_dimens_with_halo, surface_elevations_d
         );
 
         ret = cudaDeviceSynchronize();
@@ -242,7 +239,7 @@ int main(int argc, char *argv[])
         }
 
         timestep_forward_kernel<<<blocksPerCellGrid, threadsPerBlock>>>(
-            surface_elevations_d, elev_dimens, in, out, grid_dimens, dt
+            surface_elevations_d, elev_dimens_with_halo, in, out, grid_dimens_with_halo, dt
         );
 
         ret = cudaDeviceSynchronize();
@@ -262,7 +259,8 @@ int main(int argc, char *argv[])
     if (rank == 0) {
         water_levels = (double *) malloc(master_grid_len);
     }
-    MPI_Gather(result + padding_above * grid_dimens_with_halo.x, grid_len, MPI_BYTE, water_levels, master_grid_len, MPI_BYTE, 0, MPI_COMM_WORLD);
+    double *result_offset_from_halo = result + (padding_above * grid_dimens_with_halo.x);
+    MPI_Gather(result_offset_from_halo, grid_len, MPI_BYTE, water_levels, master_grid_len, MPI_BYTE, 0, MPI_COMM_WORLD);
 
     if (rank == 0) {
         write_bmp(filename, master_grid_width, master_grid_height, water_levels);
