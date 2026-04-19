@@ -126,7 +126,6 @@ int main(int argc, char *argv[])
     double *water_levels_b_d;
 
     cudaError_t ret;
-    int elev_len = elev_dimens.x*elev_dimens.y*sizeof(double);
     int grid_len = grid_dimens.x*grid_dimens.y*sizeof(double);
     int elev_len_with_halo = elev_dimens_with_halo.x*elev_dimens_with_halo.y*sizeof(double);
     int grid_len_with_halo = grid_dimens_with_halo.x*grid_dimens_with_halo.y*sizeof(double);
@@ -193,7 +192,7 @@ int main(int argc, char *argv[])
         double *in = i % 2 == 0 ? water_levels_a_d : water_levels_b_d;
         double *out = i % 2 == 0 ? water_levels_b_d : water_levels_a_d;
 
-        ret = cudaMemcpy(out, in, grid_len, cudaMemcpyDeviceToDevice);
+        ret = cudaMemcpy(out, in, grid_len_with_halo, cudaMemcpyDeviceToDevice);
         if (ret != cudaSuccess) {
             fprintf(stderr, "CUDA memcpy failed; ret=%d\n", ret);
             return EXIT_FAILURE;
