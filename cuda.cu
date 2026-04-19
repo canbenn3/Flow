@@ -64,6 +64,12 @@ int run_simulation(
         return EXIT_FAILURE;
     }
 
+    ret = cudaMemset(water_levels_a_d, 0, grid_len);
+    if (ret != cudaSuccess) {
+        fprintf(stderr, "Failed to zero memory; ret=%d\n", ret);
+        return EXIT_FAILURE;
+    }
+
     ret = cudaMalloc((void **) &water_levels_b_d, grid_len);
     if (ret != cudaSuccess) {
         fprintf(stderr, "Device memory allocation failed; ret=%d\n", ret);
@@ -78,12 +84,6 @@ int run_simulation(
     {
         double *in = i % 2 == 0 ? water_levels_a_d : water_levels_b_d;
         double *out = i % 2 == 0 ? water_levels_b_d : water_levels_a_d;
-
-        ret = cudaMemcpy(out, in, grid_len, cudaMemcpyDeviceToDevice);
-        if (ret != cudaSuccess) {
-            fprintf(stderr, "CUDA memcpy failed; ret=%d\n", ret);
-            return EXIT_FAILURE;
-        }
 
         add_rain_kernel<<<blocksPerCellGrid, threadsPerBlock>>>(
             in, grid_dimens, rain_per_timestep

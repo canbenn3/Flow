@@ -177,7 +177,7 @@ int main(int argc, char *argv[])
         }
     }
     MPI_Recv(elevations_d, elev_len_with_halo, MPI_BYTE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    printf("Received elevation map data\n");
+    printf("Rank %d: received elevation map data\n", rank);
 
     MPI_Barrier(MPI_COMM_WORLD);
 
@@ -227,12 +227,6 @@ int main(int argc, char *argv[])
             in, grid_dimens_with_halo, rain_per_timestep
         );
 
-        ret = cudaMemcpy(out, in, grid_len_with_halo, cudaMemcpyDeviceToDevice);
-        if (ret != cudaSuccess) {
-            fprintf(stderr, "CUDA memcpy failed; ret=%d\n", ret);
-            return EXIT_FAILURE;
-        }
-
         ret = cudaDeviceSynchronize();
         if (ret != cudaSuccess) {
             fprintf(stderr, "CUDA synchronize failed; ret=%d\n", ret);
@@ -272,7 +266,7 @@ int main(int argc, char *argv[])
     if (rank == 0) {
         water_levels = (double *) malloc(master_grid_len);
         if (water_levels == NULL) {
-            fprintf(stderr, "Unable to allocate result buffer on host\n", ret);
+            fprintf(stderr, "Unable to allocate result buffer on host; len=%d\n", master_grid_len);
             MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
             return EXIT_FAILURE;
         }
@@ -302,7 +296,7 @@ int main(int argc, char *argv[])
 
     double *water_levels_partial = (double *) malloc(grid_len);
     if (water_levels_partial == NULL) {
-        fprintf(stderr, "Unable to allocate copyback buffer on host\n", ret);
+        fprintf(stderr, "Unable to allocate copyback buffer on host; len=%d\n", grid_len);
         MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
         return EXIT_FAILURE;
     }
