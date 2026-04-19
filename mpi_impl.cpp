@@ -31,55 +31,66 @@ void timestep_forward(
     double dt // timestep
 )
 {
-    // Initialize output array with the current water levels.
-    // We must keep the water that *doesn't* move, then add/subtract the changes.
-    std::memcpy(water_levels_out, water_levels_in, width * height * sizeof(double));
-
     // Iterate through each cell, subtract outflow, and add inflow to neighbors
     for (int y = 0; y < height; y++)
     {
         for (int x = 0; x < width; x++)
         {
-            double current_water = water_levels_in[y * width + x];
+            // Calculate water flowing into cell (outflow could cause race conditions)
+            double inflow = 0;
 
-            // Optimization: Skip calculations if the cell is essentially dry
-            if (current_water < 1e-6)
-                continue;
+            for (u_int8_t i = 0; i < 9; i++)
+            {
+                int8_t del_x = (i % 3) - 1;
+                int8_t del_y = (i / 3) - 1;
 
-            // Compute discharge using the new dt parameter
-            Discharge discharge = compute_discharge(
+                // Ignore corners and center
+                if ((del_x == 0) ^ (del_y == 0))
+                {
+                    int n_x = x + del_x;
+                    int n_y = y + del_y;
+                    if (n_x < width && n_x >= 0 && n_y >= 0 && n_y < height)
+                    {
+                        double current_water = water_levels_in[(y + del_y) * width + (x + del_x)];
+
+                        Discharge neighbor_discharge = compute_discharge(
+                            precomputed_cell_geometry[(y + del_y) * width + (x + del_x)],
+                            current_water,
+                            dt);
+
+                        // North neighbor: south discharge flows into cell
+                        if (del_y == -1)
+                        {
+                            inflow += neighbor_discharge.south;
+                        }
+
+                        // East neighbor: west discharge flows into cell
+                        if (del_x == 1)
+                        {
+                            inflow += neighbor_discharge.west;
+                        }
+
+                        // South neighbor: north discharge flows into cell
+                        if (del_y == 1)
+                        {
+                            inflow += neighbor_discharge.north;
+                        }
+
+                        // West neighbor: east discharge flows into cell
+                        if (del_x == -1)
+                        {
+                            inflow += neighbor_discharge.east;
+                        }
+                    }
+                }
+            }
+            Discharge own_discharge = compute_discharge(
                 precomputed_cell_geometry[y * width + x],
-                current_water,
+                water_levels_in[y * width + x],
                 dt);
-
             // Subtract the total water leaving this cell
-            double total_outflow = discharge.north + discharge.south + discharge.east + discharge.west;
-            water_levels_out[y * width + x] -= total_outflow;
-
-            // Distribute the outflow to the appropriate neighbors
-            int north_y = y - 1;
-            if (north_y >= 0)
-            {
-                water_levels_out[north_y * width + x] += discharge.north;
-            }
-
-            int east_x = x + 1;
-            if (east_x < width)
-            {
-                water_levels_out[y * width + east_x] += discharge.east;
-            }
-
-            int south_y = y + 1;
-            if (south_y < height)
-            {
-                water_levels_out[south_y * width + x] += discharge.south;
-            }
-
-            int west_x = x - 1;
-            if (west_x >= 0)
-            {
-                water_levels_out[y * width + west_x] += discharge.west;
-            }
+            double outflow = own_discharge.north + own_discharge.south + own_discharge.east + own_discharge.west;
+            water_levels_out[y * width + x] = water_levels_in[y * width + x] + inflow - outflow;
         }
     }
 }
@@ -114,6 +125,8 @@ void add_rain(double *water_levels, int width, int height, double rain)
 }
 
 // A helper function to run at the start of every timestep
+//for mpi, y is the top of the local terrian slice, not the global evelvations
+//because we only pass in owned, ghost rows should be safe
 void compute_water_surface_elevations(
     double *terrain_elevations,
     double *water_levels,
@@ -168,6 +181,70 @@ void compute_water_surface_elevations(
     }
 }
 
+//helper function to exchange ghost rows between processes. Essentially, this is here to make it so functions can read from each other. Assume it takes full slice, not the owned slice
+void halo_exchange 
+(
+    double *water_levels,
+    int grid_width,
+    int local_rows,
+    int rank,
+    int comm_sz,
+    int owned_grid_offset
+)
+{   
+    //calculate pointers for various parts of the water_levels given local rows and such. 
+    //naive calculate, becuase extra logic kinda doesn't add much. if top_ghost_row = ownded start, there is other logic we can do. 
+    double *top_ghost_row = water_levels;
+    double *owned_start_row = water_levels + owned_grid_offset;
+    
+    double *owned_end_row = water_levels + owned_grid_offset + (local_rows - 1) * grid_width;
+    double *bottom_ghost_row = water_levels + owned_grid_offset + local_rows * grid_width;
+
+    //determine neighbors
+    int top_neighbor = rank - 1;
+    int bottom_neighbor = rank + 1;
+
+    //exchange logic
+    if(rank != 0)
+    {
+        //exchange top ghost rows with nieghbor. Using MPI_Sendrecv to avoid deadlocks
+        MPI_Sendrecv(
+            owned_start_row,
+            grid_width,
+            MPI_DOUBLE,
+            top_neighbor,
+            0,
+            top_ghost_row,
+            grid_width,
+            MPI_DOUBLE,
+            top_neighbor,
+            0,
+            MPI_COMM_WORLD,
+            MPI_STATUS_IGNORE
+        );
+    }
+
+    if(rank != comm_sz - 1)
+    {
+        //exchange bottom ghost rows. using MPI_Sendrecv to avoid deadlocks
+        MPI_Sendrecv(
+            owned_end_row,
+            grid_width,
+            MPI_DOUBLE,
+            bottom_neighbor,
+            0,
+            bottom_ghost_row,
+            grid_width,
+            MPI_DOUBLE,
+            bottom_neighbor,
+            0,
+            MPI_COMM_WORLD,
+            MPI_STATUS_IGNORE
+        );
+    }
+
+}
+
 void run_simulation(
     double *elevation,
     double *surface_elevations,
@@ -180,20 +257,44 @@ void run_simulation(
     double total_rainfall_inches,
     int local_rows,
     int start_row,
-    int rank)
+    int rank,
+    int p)
 {
-    // Add water each timestep to simulate rainfall
+    //compute things necessary for the simulation
     double rain_per_timestep = total_rainfall_inches / num_timesteps;
     int grid_width = elev_width - 1;
+    int top_ghost_row = 0;
+    int bottom_ghost_row = 0;
+    //find ghost rows
+    if (rank != 0) 
+    {
+        top_ghost_row = 1;
+    }
+    if (rank != p - 1)
+    {
+        bottom_ghost_row = 1;
+    }
+
+    //find grid offset for ghost rows
+    int owned_grid_offset = top_ghost_row * grid_width;
+    //run simulation.
     GridCell *geometry = (GridCell *)malloc(grid_width * local_rows * sizeof(GridCell));
     for (int i = 0; i < num_timesteps; i++)
     {
         double *in = i % 2 == 0 ? a : b;
         double *out = i % 2 == 0 ? b : a;
-        add_rain(in, grid_width, local_rows, rain_per_timestep);
-        compute_water_surface_elevations(elevation, in, surface_elevations, elev_width, local_rows+1);
-        compute_grid_geometry(surface_elevations, elev_width, local_rows+1, geometry);
-        timestep_forward(geometry, in, out, grid_width, local_rows, dt);
+
+        //use offset to find owned region start:
+        double *owned_in = in + owned_grid_offset;
+        double *owned_out = out + owned_grid_offset;
+
+        add_rain(owned_in, grid_width, local_rows, rain_per_timestep);
+
+        //halo exchange
+
+        compute_water_surface_elevations(elevation, owned_in, surface_elevations, elev_width, elev_height);
+        compute_grid_geometry(surface_elevations, elev_width, elev_height, geometry);
+        timestep_forward(geometry, in, owned_out, grid_width, local_rows, dt);
     }
     free(geometry);
 }
@@ -377,7 +478,7 @@ int main(int argc, char *argv[])
 
     // Run the simulation
     auto start_time = std::chrono::high_resolution_clock::now();
-    run_simulation(local_elevations, local_surface_elevations, local_a, local_b, num_timesteps, width, terrian_local_rows, dt, inch_to_meter(rain_inches_total), local_rows, start_row, my_rank);
+    run_simulation(local_elevations, local_surface_elevations, local_a, local_b, num_timesteps, width, terrian_local_rows, dt, inch_to_meter(rain_inches_total), local_rows, start_row, my_rank, comm_sz);
     
     //gather local a and local b into a and b
     double *local_result = (num_timesteps % 2 == 0) ? local_a : local_b;
