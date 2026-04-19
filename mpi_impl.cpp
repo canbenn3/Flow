@@ -24,16 +24,24 @@
 
 void timestep_forward(
     GridCell *precomputed_cell_geometry,
-    double *water_levels_in,
-    double *water_levels_out,
+    double *water_levels_in, //includes ghost rows,
+    double *water_levels_out, //owned region only,
     int width,
-    int height,
+    int height, //of local owned slice - does not count ghost rows,
+    int owned_grid_offset,
+    int top_ghost_row_count, 
+    int bottom_ghost_row_count,
     double dt // timestep
 )
 {
+    //figure out how many total rows
+    int total_in_rows = height + top_ghost_row_count + bottom_ghost_row_count;
+    
     // Iterate through each cell, subtract outflow, and add inflow to neighbors
     for (int y = 0; y < height; y++)
     {
+        int in_y = y + top_ghost_row_count;
+
         for (int x = 0; x < width; x++)
         {
             // Calculate water flowing into cell (outflow could cause race conditions)
@@ -48,10 +56,10 @@ void timestep_forward(
                 if ((del_x == 0) ^ (del_y == 0))
                 {
                     int n_x = x + del_x;
-                    int n_y = y + del_y;
-                    if (n_x < width && n_x >= 0 && n_y >= 0 && n_y < height)
+                    int n_y = in_y + del_y;
+                    if (n_x < width && n_x >= 0 && n_y >= 0 && n_y < total_in_rows)
                     {
-                        double current_water = water_levels_in[(y + del_y) * width + (x + del_x)];
+                        double current_water = water_levels_in[(in_y + del_y) * width + (x + del_x)];
 
                         Discharge neighbor_discharge = compute_discharge(
                             precomputed_cell_geometry[(y + del_y) * width + (x + del_x)],
@@ -86,20 +94,21 @@ void timestep_forward(
             }
             Discharge own_discharge = compute_discharge(
                 precomputed_cell_geometry[y * width + x],
-                water_levels_in[y * width + x],
+                water_levels_in[in_y * width + x],
                 dt);
             // Subtract the total water leaving this cell
             double outflow = own_discharge.north + own_discharge.south + own_discharge.east + own_discharge.west;
-            water_levels_out[y * width + x] = water_levels_in[y * width + x] + inflow - outflow;
+            water_levels_out[y * width + x] = water_levels_in[in_y * width + x] + inflow - outflow;
         }
     }
 }
 
+//geometry has ghost rows - we don't need to change anything because we only pass through owned slice
 void compute_grid_geometry(
     double *elevations,
     int elevations_width,
     int elevations_height,
-    GridCell *geometry)
+    GridCell *geometry) //local owned slice only - techinally has ghost row, but height won't read it)
 {
     int grid_width = elevations_width - 1;
 
@@ -182,7 +191,7 @@ void compute_water_surface_elevations(
 }
 
 //helper function to exchange ghost rows between processes. Essentially, this is here to make it so functions can read from each other. Assume it takes full slice, not the owned slice
-void halo_exchange 
+void halo_exchange_water 
 (
     double *water_levels,
     int grid_width,
@@ -243,6 +252,70 @@ void halo_exchange
     }
 
 }
+//helper function to exchange rows of gridcell grids 
+//- is needed instead of water cause structs are different data type than doubles
+//we are sending bytes instead.
+void halo_exchange_geometry(
+    GridCell *geometry, //full local slice, not just owned slice,
+    int grid_width,
+    int local_rows,
+    int rank,
+    int comm_sz, 
+    int owned_grid_offset
+)
+{
+    //calculate pointers for various parts of the geometery given local rows and such. 
+    GridCell *top_ghost_row = geometry;
+    GridCell *owned_start_row = geometry + owned_grid_offset;
+    
+    GridCell *owned_end_row = geometry + owned_grid_offset + (local_rows - 1) * grid_width;
+    GridCell *bottom_ghost_row = geometry + owned_grid_offset + local_rows * grid_width;
+
+    //determine neighbors
+    int top_neighbor = rank - 1;
+    int bottom_neighbor = rank + 1;
+
+    //how many bytes
+    int row_byte_count = grid_width * sizeof(GridCell);
+
+    //if valid, send and recive top rows
+    if(rank != 0)
+    {
+        MPI_Sendrecv(
+            owned_start_row, 
+            row_byte_count,
+            MPI_BYTE,
+            top_neighbor,
+            0,
+            top_ghost_row,
+            row_byte_count,
+            MPI_BYTE,
+            top_neighbor,
+            0,
+            MPI_COMM_WORLD,
+            MPI_STATUS_IGNORE
+        );
+    }
+
+    //if valid, send and receive bottom rows
+    if(rank != comm_sz - 1)
+    {
+        MPI_Sendrecv(
+            owned_end_row, 
+            row_byte_count,
+            MPI_BYTE,
+            bottom_neighbor,
+            0,
+            bottom_ghost_row,
+            row_byte_count,
+            MPI_BYTE,
+            bottom_neighbor,
+            0,
+            MPI_COMM_WORLD,
+            MPI_STATUS_IGNORE
+        );
+    }
+}
 
 void run_simulation(
     double *elevation,
@@ -262,18 +335,22 @@ void run_simulation(
     //compute things necessary for the simulation
     double rain_per_timestep = total_rainfall_inches / num_timesteps;
     int grid_width = elev_width - 1;
-    int top_ghost_row = 0;
-    int bottom_ghost_row = 0;
+    int top_ghost_row_count = 0;
+    int bottom_ghost_row_count = 0;
     //find ghost rows
     if (rank != 0) 
     {
-        top_ghost_row = 1;
+        top_ghost_row_count = 1;
+    }
+    if (rank != p - 1)
+    {
+        bottom_ghost_row_count = 1;
     }
 
     //find grid offset for ghost rows
-    int owned_grid_offset = top_ghost_row * grid_width;
+    int owned_grid_offset = top_ghost_row_count * grid_width;
     //run simulation.
-    GridCell *geometry = (GridCell *)malloc(grid_width * local_rows * sizeof(GridCell));
+    GridCell *geometry = (GridCell *)malloc(grid_width * (local_rows + top_ghost_row_count + bottom_ghost_row_count) * sizeof(GridCell));
     for (int i = 0; i < num_timesteps; i++)
     {
         double *in = i % 2 == 0 ? a : b;
@@ -282,14 +359,17 @@ void run_simulation(
         //use offset to find owned region start:
         double *owned_in = in + owned_grid_offset;
         double *owned_out = out + owned_grid_offset;
+        GridCell *owned_geometry = geometry + owned_grid_offset;
 
         add_rain(owned_in, grid_width, local_rows, rain_per_timestep);
-
-        halo_exchange(in, grid_width, local_rows, rank, p, owned_grid_offset);
-
+        halo_exchange_water(in, grid_width, local_rows, rank, p, owned_grid_offset);
         compute_water_surface_elevations(elevation, owned_in, surface_elevations, elev_width, elev_height);
-        compute_grid_geometry(surface_elevations, elev_width, elev_height, geometry);
-        timestep_forward(geometry, in, owned_out, grid_width, local_rows, dt);
+
+        compute_grid_geometry(surface_elevations, elev_width, elev_height, owned_geometry);
+
+        //once we know the grid geometry, we must echange top and bottom rows of the owned slices
+        halo_exchange_geometry(geometry, grid_width, local_rows, rank, p, owned_grid_offset);
+        timestep_forward(geometry, in, owned_out, grid_width, local_rows, owned_grid_offset, top_ghost_row_count, bottom_ghost_row_count, dt);
     }
     free(geometry);
 }
