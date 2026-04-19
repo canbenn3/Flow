@@ -269,12 +269,27 @@ int main(int argc, char *argv[])
             MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
             return EXIT_FAILURE;
         }
+
+        // When we scattered data, the boundaries were set to overlap in order
+        // to configure halos. When we gather data, we want to copy only the
+        // regions without the halos. Remove the overlap.
+        for (int i = 0; i < (comm_size - 1); i++) {
+            grid_rows[i] -= 1;
+            offsets[i + 1] += 1;
+            grid_rows[i + 1] -= 1;
+        }
+
+        for (int i = 0; i < comm_size; i++) {
+            grid_rows[i] *= grid_dimens.x * sizeof(double);
+            offsets[i] *= grid_dimens.x * sizeof(double);
+            printf("grid_rows[%d]=%d; offsets[%d]=%d\n", i, grid_rows[i], i, offsets[i]);
+        }
     }
 
     double *result_offset_from_halo = result + (padding_above * grid_dimens_with_halo.x);
 
     #ifndef USE_HOST_COPYBACK_BUF
-    MPI_Gather(result_offset_from_halo, grid_len, MPI_BYTE, water_levels, master_grid_len, MPI_BYTE, 0, MPI_COMM_WORLD);
+    MPI_Gatherv(result_offset_from_halo, grid_len, MPI_BYTE, water_levels, grid_rows, offsets, MPI_BYTE, 0, MPI_COMM_WORLD);
     #endif
 
     #ifdef USE_HOST_COPYBACK_BUF
@@ -293,9 +308,9 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    MPI_Gather(water_levels_partial, grid_len, MPI_BYTE, water_levels, master_grid_len, MPI_BYTE, 0, MPI_COMM_WORLD);
+    MPI_Gatherv(water_levels_partial, grid_len, MPI_BYTE, water_levels, grid_rows, offsets, MPI_BYTE, 0, MPI_COMM_WORLD);
     free(water_levels_partial);
-    
+
     #endif
 
     if (rank == 0) {
