@@ -28,3 +28,6 @@ time mpiexec -n 2 cuda-distributed ../elevation-maps/USU.tif 100 25
 
 echo "---Hyrum.tif 100 25 (2 GPUs)---"
 time mpiexec -n 2 cuda-distributed ../elevation-maps/Hyrum.tif 100 25
+
+echo "---cache_valley.tif 100 25 (2 GPUs)---"
+time mpiexec -n 2 cuda-distributed ../elevation-maps/cache_valley.tif 100 25
