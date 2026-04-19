@@ -520,12 +520,11 @@ int main(int argc, char *argv[])
     int ghost_rows = top_ghost_rows + bottom_ghost_rows;
     int owned_grid_offset = top_ghost_rows * grid_width;
 
-    //have root initalize global variables 
+    //have root initalize global variables - we don't need globabl surface_elevations or goemtery because those are mostly just done on locakl
     if (my_rank == 0)
     {
         a = (double *)calloc(grid_width * grid_height, sizeof(double));
         b = (double *)calloc(grid_width * grid_height, sizeof(double));
-        surface_elevations = (double *)malloc(width * height * sizeof(double));
     }
     
 
