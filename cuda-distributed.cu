@@ -1,6 +1,7 @@
 /**
  * read-geo-data.cpp equires C++17 or greater.
  * Compile with `nvcc -c --std=c++17 cuda-distributed.cu -o cuda-distributed.o && mpicxx cuda-distributed.o -o cuda-distributed -lcudart -lgdal -lstdc++fs`
+ * Must run `ulimit -l unlimited` prior to running with `mpiexec` to allow RDMA adapters to initialize properly
  */
 
 #include "kernels.cu"
@@ -30,7 +31,6 @@ int main(int argc, char *argv[])
     double total_rainfall_meters;
     double* master_elevations = NULL;
     unsigned int master_grid_width, master_grid_height, process_grid_height;
-    unsigned int master_elevations_len;
     int offsets[comm_size];
     int grid_rows[comm_size];
 
@@ -39,7 +39,8 @@ int main(int argc, char *argv[])
         if (argc < 2)
         {
             usage();
-            return 1;
+            MPI_Finalize();
+            return 0;
         }
         filename = argv[1];
         num_timesteps = 1000; // defaults
@@ -137,19 +138,20 @@ int main(int argc, char *argv[])
     if (rank == 0) {
         for (int i = 0; i < comm_size; i++) {
             int elev_offset = offsets[i] * elev_dimens.x;
-            int elev_len = (grid_rows[i] + 1) * elev_dimens.x;
+            int elev_len = (grid_rows[i] + 1) * elev_dimens.x * sizeof(double);
             MPI_Request req;
-            MPI_Isend(master_elevations + elev_offset, elev_len, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, &req);
+            MPI_Isend(master_elevations + elev_offset, elev_len, MPI_BYTE, i, 0, MPI_COMM_WORLD, &req);
             // Can safely discard the request handle; master_elevations remains
             // in memory for lifetime of the program
             MPI_Request_free(&req);
         }
     }
-    MPI_Recv(elevations_d, elev_len, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    MPI_Recv(elevations_d, elev_len, MPI_BYTE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    printf("Received elevation map data\n");
 
     // Run the simulation on the GPU
 
-    int block_size_x = 32;
+    /*int block_size_x = 32;
     int block_size_y = 32;
     double dt = 1;
 
@@ -200,9 +202,9 @@ int main(int argc, char *argv[])
         if (i % 10 == 0) {
             fprintf(stderr, "Iteration %d\n", i);
         }
-    }
+    }*/
 
-    double *result = (num_timesteps % 2 == 0) ? water_levels_a_d : water_levels_b_d;
+    /*double *result = (num_timesteps % 2 == 0) ? water_levels_a_d : water_levels_b_d;
     double *water_levels = NULL;
     if (rank == 0) {
         water_levels = (double *) malloc(master_grid_len);
@@ -212,7 +214,7 @@ int main(int argc, char *argv[])
     if (rank == 0) {
         write_bmp(filename, master_grid_width, master_grid_height, water_levels);
         free(water_levels);
-    }
+    }*/
 
     MPI_Finalize();
 

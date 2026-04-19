@@ -13,11 +13,15 @@ int main(int argc, char** argv) {
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-    int test_value = (rank == 0) ? 42 : 0;
-    int *d_ptr;
+    // 944 works; 945 does not
+    // Must first run `ulimit -l unlimited` to allow RDMA adapters to init properly
+    // (at least in my interactive slurm)
+    int len = 945;
+    char *bstream = (char *) malloc(len);
+    char *d_ptr;
 
     // 1. Allocate on GPU
-    cudaError_t err = cudaMalloc(&d_ptr, sizeof(int));
+    cudaError_t err = cudaMalloc(&d_ptr, len);
     if (err != cudaSuccess) {
         fprintf(stderr, "Rank %d: cudaMalloc failed\n", rank);
         MPI_Abort(MPI_COMM_WORLD, 1);
@@ -26,19 +30,19 @@ int main(int argc, char** argv) {
     // 2. Perform CUDA-Aware MPI call
     // We are passing a GPU pointer (d_ptr) directly to MPI
     MPI_Request req;
-    MPI_Isend(&test_value, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, &req);
+    MPI_Isend(bstream, len, MPI_BYTE, 0, 0, MPI_COMM_WORLD, &req);
     MPI_Request_free(&req);
-    MPI_Recv(d_ptr, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    MPI_Recv(d_ptr, len, MPI_BYTE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
     // 3. Verify by copying back to a local host variable
-    int result = 0;
-    cudaMemcpy(&result, d_ptr, sizeof(int), cudaMemcpyDeviceToHost);
+    // int result = 0;
+    // cudaMemcpy(&result, d_ptr, sizeof(int), cudaMemcpyDeviceToHost);
 
-    if (result == 42) {
-        printf("Rank %d: Success! Received %d on GPU.\n", rank, result);
-    } else {
-        printf("Rank %d: Failed! Received %d.\n", rank, result);
-    }
+    // if (result == 42) {
+    //     printf("Rank %d: Success! Received %d on GPU.\n", rank, result);
+    // } else {
+    //     printf("Rank %d: Failed! Received %d.\n", rank, result);
+    // }
 
     cudaFree(d_ptr);
     MPI_Finalize();
