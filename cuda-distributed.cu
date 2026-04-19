@@ -125,10 +125,10 @@ int main(int argc, char *argv[])
     double *water_levels_b_d;
 
     cudaError_t ret;
-    int grid_len = grid_dimens.x*grid_dimens.y*sizeof(double);
-    int elev_len_with_halo = elev_dimens_with_halo.x*elev_dimens_with_halo.y*sizeof(double);
-    int grid_len_with_halo = grid_dimens_with_halo.x*grid_dimens_with_halo.y*sizeof(double);
-    int master_grid_len = master_grid_width*master_grid_height*sizeof(double);
+    size_t grid_len = grid_dimens.x*grid_dimens.y*sizeof(double);
+    size_t elev_len_with_halo = elev_dimens_with_halo.x*elev_dimens_with_halo.y*sizeof(double);
+    size_t grid_len_with_halo = grid_dimens_with_halo.x*grid_dimens_with_halo.y*sizeof(double);
+    size_t master_grid_len = master_grid_width*master_grid_height*sizeof(double);
 
     ret = cudaMalloc((void **) &elevations_d, elev_len_with_halo);
     if (ret != cudaSuccess) {
