@@ -98,7 +98,7 @@ __global__ void timestep_forward_kernel(
         );
         double outflow = discharge.north + discharge.south + discharge.east + discharge.west;
 
-        water_levels_out[pos.y * grid_dimens.x + pos.x] += inflow - outflow;
+        water_levels_out[pos.y * grid_dimens.x + pos.x] = water_levels_in[pos.y * grid_dimens.x + pos.x] + inflow - outflow;
     }
 }
 
