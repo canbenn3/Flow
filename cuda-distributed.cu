@@ -12,7 +12,7 @@
 #include "write-bmp.cpp"
 #include <mpi.h>
 
-#define USE_HOST_COPYBACK_BUF
+// #define USE_HOST_COPYBACK_BUF
 
 void usage()
 {
@@ -151,6 +151,13 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
+    ret = cudaMemset(water_levels_a_d, 0, grid_len_with_halo);
+    if (ret != cudaSuccess) {
+        fprintf(stderr, "Failed to zero memory; ret=%d\n", ret);
+        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+        return EXIT_FAILURE;
+    }
+
     ret = cudaMalloc((void **) &water_levels_b_d, grid_len_with_halo);
     if (ret != cudaSuccess) {
         fprintf(stderr, "Device memory allocation failed; ret=%d\n", ret);
@@ -195,12 +202,6 @@ int main(int argc, char *argv[])
         double *in = i % 2 == 0 ? water_levels_a_d : water_levels_b_d;
         double *out = i % 2 == 0 ? water_levels_b_d : water_levels_a_d;
 
-        ret = cudaMemcpy(out, in, grid_len_with_halo, cudaMemcpyDeviceToDevice);
-        if (ret != cudaSuccess) {
-            fprintf(stderr, "CUDA memcpy failed; ret=%d\n", ret);
-            return EXIT_FAILURE;
-        }
-
         if (rank_above >= 0) {
             MPI_Request req;
             MPI_Isend(in + grid_dimens_with_halo.x, grid_dimens_with_halo.x, MPI_DOUBLE, rank_above, 0, MPI_COMM_WORLD, &req);
@@ -225,6 +226,12 @@ int main(int argc, char *argv[])
         add_rain_kernel<<<blocksPerCellGrid, threadsPerBlock>>>(
             in, grid_dimens_with_halo, rain_per_timestep
         );
+
+        ret = cudaMemcpy(out, in, grid_len_with_halo, cudaMemcpyDeviceToDevice);
+        if (ret != cudaSuccess) {
+            fprintf(stderr, "CUDA memcpy failed; ret=%d\n", ret);
+            return EXIT_FAILURE;
+        }
 
         ret = cudaDeviceSynchronize();
         if (ret != cudaSuccess) {
@@ -282,7 +289,6 @@ int main(int argc, char *argv[])
         for (int i = 0; i < comm_size; i++) {
             grid_rows[i] *= grid_dimens.x * sizeof(double);
             offsets[i] *= grid_dimens.x * sizeof(double);
-            printf("grid_rows[%d]=%d; offsets[%d]=%d\n", i, grid_rows[i], i, offsets[i]);
         }
     }
 
