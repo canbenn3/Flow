@@ -107,28 +107,28 @@ int main(int argc, char *argv[])
 
     ret = cudaMalloc((void **) &elevations_d, elev_len);
     if (ret != cudaSuccess) {
-        printf("Device memory allocation failed; ret=%d\n", ret);
+        fprintf(stderr, "Device memory allocation failed; ret=%d\n", ret);
         MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
         return EXIT_FAILURE;
     }
 
     ret = cudaMalloc((void **) &surface_elevations_d, elev_len);
     if (ret != cudaSuccess) {
-        printf("Device memory allocation failed; ret=%d\n", ret);
+        fprintf(stderr, "Device memory allocation failed; ret=%d\n", ret);
         MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
         return EXIT_FAILURE;
     }
 
     ret = cudaMalloc((void **) &water_levels_a_d, grid_len);
     if (ret != cudaSuccess) {
-        printf("Device memory allocation failed; ret=%d\n", ret);
+        fprintf(stderr, "Device memory allocation failed; ret=%d\n", ret);
         MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
         return EXIT_FAILURE;
     }
 
     ret = cudaMalloc((void **) &water_levels_b_d, grid_len);
     if (ret != cudaSuccess) {
-        printf("Device memory allocation failed; ret=%d\n", ret);
+        fprintf(stderr, "Device memory allocation failed; ret=%d\n", ret);
         MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
         return EXIT_FAILURE;
     }
@@ -151,7 +151,7 @@ int main(int argc, char *argv[])
 
     // Run the simulation on the GPU
 
-    /*int block_size_x = 32;
+    int block_size_x = 32;
     int block_size_y = 32;
     double dt = 1;
 
@@ -165,6 +165,12 @@ int main(int argc, char *argv[])
     {
         double *in = i % 2 == 0 ? water_levels_a_d : water_levels_b_d;
         double *out = i % 2 == 0 ? water_levels_b_d : water_levels_a_d;
+
+        ret = cudaMemcpy(out, in, grid_len, cudaMemcpyDeviceToDevice);
+        if (ret != cudaSuccess) {
+            fprintf(stderr, "CUDA memcpy failed; ret=%d\n", ret);
+            return EXIT_FAILURE;
+        }
 
         add_rain_kernel<<<blocksPerCellGrid, threadsPerBlock>>>(
             in, grid_dimens, rain_per_timestep
@@ -200,21 +206,21 @@ int main(int argc, char *argv[])
         }
 
         if (i % 10 == 0) {
-            fprintf(stderr, "Iteration %d\n", i);
+            printf("Iteration %d\n", i);
         }
-    }*/
+    }
 
-    /*double *result = (num_timesteps % 2 == 0) ? water_levels_a_d : water_levels_b_d;
+    double *result = (num_timesteps % 2 == 0) ? water_levels_a_d : water_levels_b_d;
     double *water_levels = NULL;
     if (rank == 0) {
         water_levels = (double *) malloc(master_grid_len);
     }
-    MPI_Gather(result, grid_len, MPI_DOUBLE, water_levels, master_grid_len, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Gather(result, grid_len, MPI_BYTE, water_levels, master_grid_len, MPI_BYTE, 0, MPI_COMM_WORLD);
 
     if (rank == 0) {
         write_bmp(filename, master_grid_width, master_grid_height, water_levels);
         free(water_levels);
-    }*/
+    }
 
     MPI_Finalize();
 
