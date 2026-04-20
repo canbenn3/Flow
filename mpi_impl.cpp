@@ -589,10 +589,12 @@ int main(int argc, char *argv[])
     //gather local a and local b into a and b
     double *local_result = (num_timesteps % 2 == 0) ? local_a : local_b;
     double *result = (num_timesteps % 2 == 0) ? a : b ;
+    MPI_Gatherv(local_result + owned_grid_offset, gridSendCounts[my_rank], MPI_DOUBLE, result, gridSendCounts, gridDisplacements, MPI_DOUBLE, 0, comm);
     
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = end_time - start_time;
     //if rank zero, print message, and write_jpg
+   
     if (my_rank == 0)
     {
         std::cout << "Simulation completed in " << diff.count() << " seconds." << std::endl;
