@@ -1,7 +1,7 @@
 /**
  * read-geo-data.cpp requires C++17 or greater.
  * Compile with cmake - make a cmake directory,
- * Run form project folder. Once you have build with cmake, use ./build/mpi [comm_sz/#of processors], use 
+ * Run form project folder. Once you have build with cmake, use ./build/mpi [comm_sz/#of processors] [iterations] [inches_of_rain] 
  * 
  * MPI implementation of the serial kinematic wave simulation
  * 
