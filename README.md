@@ -1,87 +1,34 @@
 # Hydrological Flow Simulation
-This utility is designed to model heavy rainfall over a period of time and track the movement and aggregation of water over a GIS dataset representing an area's elevation data.
+This utility is designed to model heavy rainfall over a period of time and track the movement and aggregation of water over a GIS dataset representing an area's elevation data. It is meant to primarily be run on the University of Utah's CHPC cluster, and all instructions to run the files will be given with that in mind.
 
-### **1. Prerequisites**
+## Background
 
-You must install the GDAL development headers and the binary utilities.
+The function we used to calculate water runoff is based off the paper [Two-dimensional kinematic wave model of overland-flow](https://www.sciencedirect.com/science/article/abs/pii/S0022169403005146?via%3Dihub) published by the Journal of Hydrology. The overall concept of the function used is that given a grid of elevation data, we calculate the gradient formed by each group of 4 cells. This results in another set of coordinates (with a width of 1 cell less than the total elevation grid size). Using this grid of gradients, we calculate the amount of water that flows to the cell most aligned with this gradient (for example, if a group of 4 cells has a gradient pointing to 45 degrees from the "x-axis", the water would flow to the upper right cell).
 
-Ubuntu / Debian / WSL
-```Bash
-sudo apt-get update
-sudo apt-get install libgdal-dev gdal-bin g++
-```
-MacOS (using Homebrew)
-```Bash
-brew install gdal
-```
-### **2. Compilation**
+As this methodology doesn't account for the pooling of water, we modified it slightly. Each timestep of our process includes the following:
+1. Adding rain water to each cell.
+2. Compute the total surface level elevation (including both terrain elevation and water level).
+3. Compute the grid geometry (that allows us to predict the flow of water).
+4. Calculate where the water flows for the next time step.
 
-To compile, you must link the GDAL library using the -lgdal flag.
+The algorithm mentioned above computes grid geometry from terrain. We modified it to calculate the grid geometry from the combination of elevation and water level since pooled water will change where water can flow.
 
-```Bash
-g++ -O3 <filename>.cpp -o <output> -lgdal
-```
+## Output
+Each version of our function (serial, OpenMP, etc.) produces a bitmap file that represents the *water level* at each point of the given grid. A space that is completely black represents no water, and the cells with the maximum amount of blue represent an area with over 12 inches of water.
 
-## Get started with Simple testing files
-
-**1. Compiling the test script**
-```Bash
-g++ -03 generate_test.cpp -0 generate_test -lgdal
+## Running the Code
+We use CMake to compile all the code on our cluster. To best match our results, run these commands on the Kingspeak cluster. Run this to load all of the prerequisite models:
+```bash
+$ module load cuda/11.8.0 openmpi/4.1.6-gpu gdal cmake gcc && export OMPI_MCA_opal_cuda_support=1 && ulimit -l unlimited
 ```
 
-**2. Directory Setup**
-
-The script expects a `test_data` folder to exist in the same directory as the executable.
-
-```Bash
-mkdir -p test_data
+To compile each implementation, run the following from the project directory:
+```bash
+$ cmake .
+$ make
 ```
 
-
-**3. Running the Generator script**
-
-Run the executable to produce a few dummy `.tif` files modeling extremely simple geological features:
-
-```Bash
-./generate_test 5
-```
-**4. Verifying the Output**
-
-You can verify that the GeoTIFFs were created correctly and inspect their numerical metadata using the gdalinfo command-line tool:
-
-```Bash
-gdalinfo test_data/hill.tif
-```
-To see the raw floating-point values printed to your terminal:
-
-```Bash
-gdalinfo -stats test_data/hill.tif
-```
-Pro-Tip for CHPC Users
-If you are moving this workflow to the University of Utah's Notchpeak or Kingspeak clusters, skip the apt-get step and simply run:
-
-```Bash
-module load gdal
-g++ -O3 generate_test.cpp -o generate_test -lgdal
-```
-
-## Elevation Map generation
-**1. Compile code**
-```Bash
-g++ -O3 parse.cpp -o parse -I/usr/include/gdal -lgdal
-```
-
-**2. Directory setup**
-```Bash
-mkdir output
-```
-
-**2. Run code**
-```Bash
-./parse test_data/bowl.tif
-```
-
-You should now see a `.bmp` file inside the `output` directory.
+No that all of the binary files are compiled, you can run the scripts defined in `./launch_scripts` to produce the desired output through `$ sbatch ./launch_scripts/<script>`.
 
 # Using OpenTopography to get Digital Elevation Models
 
