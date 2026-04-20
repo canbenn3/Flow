@@ -80,6 +80,18 @@ We never reached the full desired speedup (desired speed up = num threads), but 
 
 ---
 
+# DISTRIBUTED IMPLEMENTATION
+
+| FILENAME    | NUM NODES     | TIME      |
+|-------------|---------------|-----------|
+| Hospital    | 2             | 6.91248   |
+|             | 3             | 4.69882   |
+|             | 4             | 3.55527   |
+| USU         | 2             | 306.281   |
+|             | 3             | 231.054   |
+|             | 4             | 178.97    |
+| Hyrum       | 2             | 699.864   |
+
 # SINGLE GPU IMPLEMENTATION
 
 We tested different block sizes for one of our elevation data files:
