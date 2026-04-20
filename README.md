@@ -17,6 +17,9 @@ The algorithm mentioned above computes grid geometry from terrain. We modified i
 Each version of our function (serial, OpenMP, etc.) produces a bitmap file that represents the *water level* at each point of the given grid. A space that is completely black represents no water, and the cells with the maximum amount of blue represent an area with over 12 inches of water.
 
 ## Running the Code
+
+View [this link](https://usu.box.com/s/03uzjd1dsny32k0cef6m2b8bgbqxw4uz) to get the same data that we've used for our testing.
+
 We use CMake to compile all the code on our cluster. To best match our results, run these commands on the Kingspeak cluster. Run this to load all of the prerequisite models:
 ```bash
 $ module load cuda/11.8.0 openmpi/4.1.6-gpu gdal cmake gcc && export OMPI_MCA_opal_cuda_support=1 && ulimit -l unlimited

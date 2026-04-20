@@ -7,19 +7,33 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
-# 2. Find Dependencies
 find_package(OpenMP REQUIRED)
 find_package(GDAL REQUIRED)
 find_package(MPI REQUIRED)
 
-# 3. Define the MP and Serial executables
 add_executable(mp 
     mp_impl.cpp 
     read-geo-data.cpp 
     write-bmp.cpp 
     write-jpg.cpp 
 )
-target_link_libraries(mp PRIVATE GDAL::GDAL OpenMP::OpenMP_CXX stdc++fs)
+target_link_libraries(mp PRIVATE
+    GDAL::GDAL
+    OpenMP::OpenMP_CXX
+    stdc++fs
+)
+
+add_executable(mpi
+    mpi_impl.cpp 
+    read-geo-data.cpp 
+    write-bmp.cpp 
+    write-jpg.cpp 
+)
+target_link_libraries(mpi PRIVATE
+    GDAL::GDAL
+    MPI::MPI_CXX
+    stdc++fs
+)
 
 add_executable(serial 
     serial.cpp 

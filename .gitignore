@@ -27,3 +27,8 @@ test_data/*.tif
 .vscode/
 .DS_Store
 build/
+
+#test cases
+*.bmp
+*.jpg
+output/
