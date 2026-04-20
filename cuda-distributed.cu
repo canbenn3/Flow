@@ -13,6 +13,7 @@
 #include <mpi.h>
 
 // #define USE_HOST_COPYBACK_BUF
+#define HALO_SIZE 2
 
 void usage()
 {
@@ -85,9 +86,9 @@ int main(int argc, char *argv[])
 
         // Adjust boundaries so that they overlap (halos)
         for (int i = 0; i < (comm_size - 1); i++) {
-            grid_rows[i] += 1;
-            offsets[i + 1] -= 1;
-            grid_rows[i + 1] += 1;
+            grid_rows[i] += HALO_SIZE;
+            offsets[i + 1] -= HALO_SIZE;
+            grid_rows[i + 1] += HALO_SIZE;
         }
     }
 
@@ -109,12 +110,12 @@ int main(int argc, char *argv[])
     int padding_above = 0;
 
     if (rank_above >= 0) {
-        grid_dimens.y -= 1;
-        padding_above = 1;
+        grid_dimens.y -= HALO_SIZE;
+        padding_above = HALO_SIZE;
     }
 
     if (rank_below < comm_size) {
-        grid_dimens.y -= 1;
+        grid_dimens.y -= HALO_SIZE;
     }
 
     // Allocate GPU memory
@@ -202,9 +203,11 @@ int main(int argc, char *argv[])
         double *in = i % 2 == 0 ? water_levels_a_d : water_levels_b_d;
         double *out = i % 2 == 0 ? water_levels_b_d : water_levels_a_d;
 
+        int halo_len = grid_dimens_with_halo.x * HALO_SIZE;
+
         if (rank_above >= 0) {
             MPI_Request req;
-            MPI_Isend(in + grid_dimens_with_halo.x, grid_dimens_with_halo.x, MPI_DOUBLE, rank_above, 0, MPI_COMM_WORLD, &req);
+            MPI_Isend(in + HALO_SIZE*grid_dimens_with_halo.x, halo_len, MPI_DOUBLE, rank_above, 0, MPI_COMM_WORLD, &req);
             MPI_Request_free(&req);
         }
 
@@ -212,13 +215,13 @@ int main(int argc, char *argv[])
 
         if (rank_below < comm_size) {
             MPI_Request req;
-            MPI_Isend(in + (grid_dimens_with_halo.y - 2) * grid_dimens_with_halo.x, grid_dimens_with_halo.x, MPI_DOUBLE, rank_below, 0, MPI_COMM_WORLD, &req);
+            MPI_Isend(in + (grid_dimens_with_halo.y - 2*HALO_SIZE) * grid_dimens_with_halo.x, halo_len, MPI_DOUBLE, rank_below, 0, MPI_COMM_WORLD, &req);
             MPI_Request_free(&req);
-            MPI_Recv(in + (grid_dimens_with_halo.y - 1) * grid_dimens_with_halo.x, grid_dimens_with_halo.x, MPI_DOUBLE, rank_below, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            MPI_Recv(in + (grid_dimens_with_halo.y - 1*HALO_SIZE) * grid_dimens_with_halo.x, halo_len, MPI_DOUBLE, rank_below, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         }
 
         if (rank_above >= 0) {
-            MPI_Recv(in, grid_dimens_with_halo.x, MPI_DOUBLE, rank_above, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            MPI_Recv(in, halo_len, MPI_DOUBLE, rank_above, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         }
 
         MPI_Barrier(MPI_COMM_WORLD);
@@ -275,9 +278,9 @@ int main(int argc, char *argv[])
         // to configure halos. When we gather data, we want to copy only the
         // regions without the halos. Remove the overlap.
         for (int i = 0; i < (comm_size - 1); i++) {
-            grid_rows[i] -= 1;
-            offsets[i + 1] += 1;
-            grid_rows[i + 1] -= 1;
+            grid_rows[i] -= HALO_SIZE;
+            offsets[i + 1] += HALO_SIZE;
+            grid_rows[i + 1] -= HALO_SIZE;
         }
 
         for (int i = 0; i < comm_size; i++) {
