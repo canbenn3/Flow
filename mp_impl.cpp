@@ -288,8 +288,8 @@ int main(int argc, char *argv[])
     // If num_timesteps is even, 'a' holds the final state. If odd, 'b' holds it.
     double *result = (num_timesteps % 2 == 0) ? a : b;
 
-    write_bmp(filename, grid_width, grid_height, result);
-    // write_jpg(filename, grid_width, grid_height, result);
+    //write_bmp(filename, grid_width, grid_height, result);
+    write_jpg(filename, grid_width, grid_height, result);
     // Cleanup
     free(a);
     free(b);
