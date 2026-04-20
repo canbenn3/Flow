@@ -80,7 +80,7 @@ We never reached the full desired speedup (desired speed up = num threads), but 
 
 ---
 
-# GPU IMPLEMENTATION (Not Distributed Memory)
+# SINGLE GPU IMPLEMENTATION
 
 We tested different block sizes for one of our elevation data files:
 
@@ -95,9 +95,64 @@ Results were fairly consistent across different block sizes
 
 ---
 
+# Distributed CPU vs. Distributed GPU
+
+## Distributed GPU
+
+### STRONG SCALING STUDY - Distributed GPU
+
+Increasing from 2 to 3 GPU nodes decreased simulation time across all input
+sizes except for the smallest file (`Hospital.tif`), which is understandable as
+the communication overhead associated with using another node is significant
+compared to the rest of the computation at this scale.
+
+### `cache_valley.tif` (612 MB)
+
+| NUM GPU NODES | TIME(s) |
+|---------------|---------|
+| 2             | 227.647 |
+| 3             | 58.690  |
+| 4             | 100.765 |
+
+### `USU.tif` (70.8 MB)
+
+| NUM GPU NODES | TIME(s)  |
+|---------------|----------|
+| 2             | 21.578   |
+| 3             | 7.842    |
+| 4             | 11.799   |
+
+### `Hyrum.tif` (174 MB)
+
+| NUM GPU NODES | TIME(s) |
+|---------------|---------|
+| 2             | 57.477  |
+| 3             | 16.402  |
+| 4             | 26.954  |
+
+### `Hospital.tif` (1.8 MB)
+
+| NUM GPU NODES | TIME(s)  |
+|---------------|----------|
+| 2             | 2.670    |
+| 3             | 4.849    |
+| 4             | 3.420    |
+
+---
+
 # VALIDATION
 
 1000 iterations over Hospital with 2.5 inches to `.bmp` file
 
 Compare results using `cmp file1.bmp file2.bmp`
 - Serial and OpenMP results are identical
+
+GPU implementations were compared using the ImageMagick compare utility (run
+`module load imagemagick` on CHPC):
+
+```
+magick compare -metric RMSE file1.bmp file2.bmp NULL:
+```
+
+All GPU results reported a normalized error of less than 0.0003, which can be
+attributed to floating point error.
