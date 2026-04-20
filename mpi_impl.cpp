@@ -590,39 +590,6 @@ int main(int argc, char *argv[])
     double *local_result = (num_timesteps % 2 == 0) ? local_a : local_b;
     double *result = (num_timesteps % 2 == 0) ? a : b ;
     
-    //debug
-    std::cout << "Rank " << my_rank
-          << " local_rows=" << local_rows
-          << " owned_grid_offset=" << owned_grid_offset
-          << std::endl;
-
-    // top ghost row, if it exists
-    if (top_ghost_rows == 1)
-    {
-        print_row_sample("top_ghost", local_result, 0, grid_width, my_rank);
-    }
-
-    // first owned row
-    print_row_sample("first_owned", local_result, owned_grid_offset / grid_width, grid_width, my_rank);
-
-    // last owned row
-    print_row_sample("last_owned", local_result,
-                    (owned_grid_offset / grid_width) + local_rows - 1,
-                    grid_width, my_rank);
-
-    // bottom ghost row, if it exists
-    if (bottom_ghost_rows == 1)
-    {
-        print_row_sample("bottom_ghost", local_result,
-                        (owned_grid_offset / grid_width) + local_rows,
-                        grid_width, my_rank);
-    }
-
-    std::cout << std::flush;
-    
-    MPI_Gatherv(local_result + owned_grid_offset, gridSendCounts[my_rank], MPI_DOUBLE, result, gridSendCounts, gridDisplacements, MPI_DOUBLE, 0, comm);
-
-    
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = end_time - start_time;
     //if rank zero, print message, and write_jpg
