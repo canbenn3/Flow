@@ -10,7 +10,6 @@
 // #include "read-geo-data.cpp"
 // #include "write-bmp.cpp"
 // #include "write-jpg.cpp"
-// #include "util.cpp"
 
 // Forward Declarations: Tell the compiler these exist somewhere else
 struct GeoData

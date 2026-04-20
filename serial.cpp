@@ -9,7 +9,6 @@
 // #include "read-geo-data.cpp"
 // #include "write-bmp.cpp"
 // #include "write-jpg.cpp"
-// #include "util.cpp"
 
 struct GeoData
 {
