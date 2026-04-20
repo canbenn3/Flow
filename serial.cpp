@@ -3,10 +3,23 @@
 #include <cstdio>
 #include <cstring>
 #include <chrono>
-#include "read-geo-data.cpp"
-#include "write-bmp.cpp"
-#include "write-jpg.cpp"
-#include "util.cpp"
+#include <iostream>
+#include <iomanip>
+#include <string>
+// #include "read-geo-data.cpp"
+// #include "write-bmp.cpp"
+// #include "write-jpg.cpp"
+
+struct GeoData
+{
+    double *elevations;
+    int width;
+    int height;
+};
+GeoData read_geo_data(const char *filename);
+double inch_to_meter(double inch);
+int write_jpg(const char *filename, int width, int height, double *data);
+int write_bmp(const char *filename, int width, int height, double *data);
 
 void timestep_forward(
     GridCell *precomputed_cell_geometry,
@@ -17,55 +30,66 @@ void timestep_forward(
     double dt // timestep
 )
 {
-    // Initialize output array with the current water levels.
-    // We must keep the water that *doesn't* move, then add/subtract the changes.
-    std::memcpy(water_levels_out, water_levels_in, width * height * sizeof(double));
-
     // Iterate through each cell, subtract outflow, and add inflow to neighbors
     for (int y = 0; y < height; y++)
     {
         for (int x = 0; x < width; x++)
         {
-            double current_water = water_levels_in[y * width + x];
+            // Calculate water flowing into cell (outflow could cause race conditions)
+            double inflow = 0;
 
-            // Optimization: Skip calculations if the cell is essentially dry
-            if (current_water < 1e-6)
-                continue;
+            for (u_int8_t i = 0; i < 9; i++)
+            {
+                int8_t del_x = (i % 3) - 1;
+                int8_t del_y = (i / 3) - 1;
 
-            // Compute discharge using the new dt parameter
-            Discharge discharge = compute_discharge(
+                // Ignore corners and center
+                if ((del_x == 0) ^ (del_y == 0))
+                {
+                    int n_x = x + del_x;
+                    int n_y = y + del_y;
+                    if (n_x < width && n_x >= 0 && n_y >= 0 && n_y < height)
+                    {
+                        double current_water = water_levels_in[(y + del_y) * width + (x + del_x)];
+
+                        Discharge neighbor_discharge = compute_discharge(
+                            precomputed_cell_geometry[(y + del_y) * width + (x + del_x)],
+                            current_water,
+                            dt);
+
+                        // North neighbor: south discharge flows into cell
+                        if (del_y == -1)
+                        {
+                            inflow += neighbor_discharge.south;
+                        }
+
+                        // East neighbor: west discharge flows into cell
+                        if (del_x == 1)
+                        {
+                            inflow += neighbor_discharge.west;
+                        }
+
+                        // South neighbor: north discharge flows into cell
+                        if (del_y == 1)
+                        {
+                            inflow += neighbor_discharge.north;
+                        }
+
+                        // West neighbor: east discharge flows into cell
+                        if (del_x == -1)
+                        {
+                            inflow += neighbor_discharge.east;
+                        }
+                    }
+                }
+            }
+            Discharge own_discharge = compute_discharge(
                 precomputed_cell_geometry[y * width + x],
-                current_water,
+                water_levels_in[y * width + x],
                 dt);
-
             // Subtract the total water leaving this cell
-            double total_outflow = discharge.north + discharge.south + discharge.east + discharge.west;
-            water_levels_out[y * width + x] -= total_outflow;
-
-            // Distribute the outflow to the appropriate neighbors
-            int north_y = y - 1;
-            if (north_y >= 0)
-            {
-                water_levels_out[north_y * width + x] += discharge.north;
-            }
-
-            int east_x = x + 1;
-            if (east_x < width)
-            {
-                water_levels_out[y * width + east_x] += discharge.east;
-            }
-
-            int south_y = y + 1;
-            if (south_y < height)
-            {
-                water_levels_out[south_y * width + x] += discharge.south;
-            }
-
-            int west_x = x - 1;
-            if (west_x >= 0)
-            {
-                water_levels_out[y * width + west_x] += discharge.west;
-            }
+            double outflow = own_discharge.north + own_discharge.south + own_discharge.east + own_discharge.west;
+            water_levels_out[y * width + x] = water_levels_in[y * width + x] + inflow - outflow;
         }
     }
 }
@@ -252,8 +276,8 @@ int main(int argc, char *argv[])
     // If num_timesteps is even, 'a' holds the final state. If odd, 'b' holds it.
     double *result = (num_timesteps % 2 == 0) ? a : b;
 
-    // write_bmp(filename, grid_width, grid_height, result);
-    write_jpg(filename, grid_width, grid_height, result);
+    write_bmp(filename, grid_width, grid_height, result);
+    // write_jpg(filename, grid_width, grid_height, result);
 
     // Cleanup
     free(a);
