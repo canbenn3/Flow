@@ -11,6 +11,9 @@ grid_test
 .*/
 !Makefile
 !README.md
+CMakeCache.txt
+cmake_install.cmake
+CMakeFiles/
 
 # --- Build Artifacts ---
 *.o

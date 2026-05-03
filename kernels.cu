@@ -1,23 +1,59 @@
 #include "kinematic-wave-model-liu.cpp"
 #include <cstdlib>
 
+__device__ float sample_surface_elevation_node(
+    uint2 pos,
+    const float *terrain_elevations,
+    uint2 elev_dimens,
+    const float *water_levels,
+    uint2 grid_dimens
+)
+{
+    float total_water = 0.0f;
+    int cells_counted = 0;
+
+    if (pos.x > 0 && pos.y > 0)
+    {
+        total_water += water_levels[(pos.y - 1) * grid_dimens.x + (pos.x - 1)];
+        cells_counted++;
+    }
+    if (pos.x < grid_dimens.x && pos.y > 0)
+    {
+        total_water += water_levels[(pos.y - 1) * grid_dimens.x + pos.x];
+        cells_counted++;
+    }
+    if (pos.x > 0 && pos.y < grid_dimens.y)
+    {
+        total_water += water_levels[pos.y * grid_dimens.x + (pos.x - 1)];
+        cells_counted++;
+    }
+    if (pos.x < grid_dimens.x && pos.y < grid_dimens.y)
+    {
+        total_water += water_levels[pos.y * grid_dimens.x + pos.x];
+        cells_counted++;
+    }
+
+    const float avg_water_depth = (cells_counted > 0) ? (total_water / cells_counted) : 0.0f;
+    return terrain_elevations[pos.y * elev_dimens.x + pos.x] + avg_water_depth;
+}
+
 __device__ Discharge compute_discharge_for_cell(
     uint2 pos,
-    double *water_surface_elevations,
+    const float *terrain_elevations,
     uint2 elev_dimens,
-    double *water_levels,
+    const float *water_levels,
     uint2 grid_dimens,
     double dt
 )
 {
     GridCell cell_geometry = flow_vector_direction(
-        water_surface_elevations[pos.y * elev_dimens.x + pos.x],
-        water_surface_elevations[pos.y * elev_dimens.x + pos.x + 1],
-        water_surface_elevations[(pos.y + 1) * elev_dimens.x + pos.x + 1],
-        water_surface_elevations[(pos.y + 1) * elev_dimens.x + pos.x]
+        sample_surface_elevation_node({pos.x, pos.y}, terrain_elevations, elev_dimens, water_levels, grid_dimens),
+        sample_surface_elevation_node({pos.x + 1, pos.y}, terrain_elevations, elev_dimens, water_levels, grid_dimens),
+        sample_surface_elevation_node({pos.x + 1, pos.y + 1}, terrain_elevations, elev_dimens, water_levels, grid_dimens),
+        sample_surface_elevation_node({pos.x, pos.y + 1}, terrain_elevations, elev_dimens, water_levels, grid_dimens)
     );
 
-    double current_water = water_levels[pos.y * grid_dimens.x + pos.x];
+    double current_water = static_cast<double>(water_levels[pos.y * grid_dimens.x + pos.x]);
 
     Discharge discharge = compute_discharge(
         cell_geometry,
@@ -29,12 +65,13 @@ __device__ Discharge compute_discharge_for_cell(
 }
 
 __global__ void timestep_forward_kernel(
-    double *water_surface_elevations,
+    const float *terrain_elevations,
     uint2 elev_dimens,
-    double *water_levels_in,
-    double *water_levels_out,
+    const float *water_levels_in,
+    float *water_levels_out,
     uint2 grid_dimens,
-    double dt
+    double dt,
+    double rain_per_timestep
 )
 {
     uint2 pos = {
@@ -45,7 +82,7 @@ __global__ void timestep_forward_kernel(
     if (pos.x < grid_dimens.x && pos.y < grid_dimens.y)
     {
         // Compute inflow by visiting each neighbor
-        double inflow = 0;
+        double inflow = rain_per_timestep;
         for (u_int8_t i = 0; i < 9; i++) {
             int8_t del_x = (i % 3) - 1;
             int8_t del_y = (i / 3) - 1;
@@ -57,7 +94,7 @@ __global__ void timestep_forward_kernel(
                 {
                     Discharge neighbor_discharge = compute_discharge_for_cell(
                         neighbor_pos,
-                        water_surface_elevations,
+                        terrain_elevations,
                         elev_dimens,
                         water_levels_in,
                         grid_dimens,
@@ -90,7 +127,7 @@ __global__ void timestep_forward_kernel(
         // Compute outflow
         Discharge discharge = compute_discharge_for_cell(
             pos,
-            water_surface_elevations,
+            terrain_elevations,
             elev_dimens,
             water_levels_in,
             grid_dimens,
@@ -98,76 +135,8 @@ __global__ void timestep_forward_kernel(
         );
         double outflow = discharge.north + discharge.south + discharge.east + discharge.west;
 
-        water_levels_out[pos.y * grid_dimens.x + pos.x] = water_levels_in[pos.y * grid_dimens.x + pos.x] + inflow - outflow;
-    }
-}
-
-__global__ void add_rain_kernel(
-    double *water_levels,
-    uint2 grid_dimens,
-    double rain
-)
-{
-    uint2 pos = {
-        .x = blockDim.x * blockIdx.x + threadIdx.x,
-        .y = blockDim.y * blockIdx.y + threadIdx.y
-    };
-
-    if (pos.x < grid_dimens.x && pos.y < grid_dimens.y)
-    {
-        water_levels[pos.y * grid_dimens.x + pos.x] += rain;
-    }
-}
-
-__global__ void compute_water_surface_elevations_kernel(
-    double *terrain_elevations,
-    uint2 elev_dimens,
-    double *water_levels,
-    uint2 grid_dimens,
-    double *surface_elevations_out
-)
-{
-    uint2 pos = {
-        .x = blockDim.x * blockIdx.x + threadIdx.x,
-        .y = blockDim.y * blockIdx.y + threadIdx.y
-    };
-
-    if (pos.x < elev_dimens.x && pos.y < elev_dimens.y)
-    {
-        double total_water = 0.0;
-        int cells_counted = 0;
-
-        // Check the 4 cells touching this corner node.
-        // If they are within bounds, add their water depth to our average.
-
-        // Northwest cell
-        if (pos.x > 0 && pos.y > 0)
-        {
-            total_water += water_levels[(pos.y - 1) * grid_dimens.x + (pos.x - 1)];
-            cells_counted++;
-        }
-        // Northeast cell
-        if (pos.x < grid_dimens.x && pos.y > 0)
-        {
-            total_water += water_levels[(pos.y - 1) * grid_dimens.x + pos.x];
-            cells_counted++;
-        }
-        // Southwest cell
-        if (pos.x > 0 && pos.y < grid_dimens.y)
-        {
-            total_water += water_levels[pos.y * grid_dimens.x + (pos.x - 1)];
-            cells_counted++;
-        }
-        // Southeast cell
-        if (pos.x < grid_dimens.x && pos.y < grid_dimens.y)
-        {
-            total_water += water_levels[pos.y * grid_dimens.x + pos.x];
-            cells_counted++;
-        }
-
-        double avg_water_depth = (cells_counted > 0) ? (total_water / cells_counted) : 0.0;
-
-        // // The new "terrain" the water sees is the actual dirt + the accumulated water
-        surface_elevations_out[pos.y * elev_dimens.x + pos.x] = terrain_elevations[pos.y * elev_dimens.x + pos.x] + avg_water_depth;
+        const double next_water =
+            static_cast<double>(water_levels_in[pos.y * grid_dimens.x + pos.x]) + inflow - outflow;
+        water_levels_out[pos.y * grid_dimens.x + pos.x] = static_cast<float>(next_water < 0.0 ? 0.0 : next_water);
     }
 }
