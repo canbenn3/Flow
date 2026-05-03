@@ -47,9 +47,9 @@ target_link_libraries(serial PRIVATE GDAL::GDAL stdc++fs)
 add_executable(cuda_sim cuda.cu)
 set_target_properties(cuda_sim PROPERTIES CUDA_ARCHITECTURES "native")
 # Linking to GDAL::GDAL automatically handles include directories
-target_link_libraries(cuda_sim PRIVATE GDAL::GDAL stdc++fs)
+target_link_libraries(cuda_sim PRIVATE GDAL::GDAL stdc++fs OpenMP::OpenMP_CXX)
 target_compile_options(cuda_sim PRIVATE
-    $<$<COMPILE_LANGUAGE:CUDA>:-O3 --use_fast_math --expt-relaxed-constexpr>
+    $<$<COMPILE_LANGUAGE:CUDA>:-O3 --use_fast_math --expt-relaxed-constexpr -Xcompiler=-fopenmp>
 )
 
 # 5. Distributed Cuda

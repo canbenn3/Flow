@@ -12,7 +12,7 @@
 #include <algorithm>
 #include "read-geo-data.cpp"
 #include "write-bmp.cpp"
-#include "write-jpg.cpp"
+#include "write-video.cpp"
 
 int run_simulation(
     double *elevations_in,
@@ -20,7 +20,8 @@ int run_simulation(
     double *water_levels_out,
     int num_timesteps,
     double dt,
-    double total_rainfall_meters
+    double total_rainfall_meters,
+    struct WriteVideoContext *video_ctx
 )
 {
     auto log_cuda_error = [](const char *context, cudaError_t err) {
@@ -43,6 +44,7 @@ int run_simulation(
     float *water_out_tile_d = nullptr;
 
     cudaError_t ret = cudaSuccess;
+    int host_err = 0;
     size_t elev_count = static_cast<size_t>(elev_dimens.x) * static_cast<size_t>(elev_dimens.y);
     size_t grid_count = static_cast<size_t>(grid_dimens.x) * static_cast<size_t>(grid_dimens.y);
 
@@ -89,7 +91,7 @@ int run_simulation(
         goto cleanup;
     }
 
-    for (int i = 0; i < num_timesteps; i++)
+    for (int i = 0; i < num_timesteps && host_err == 0; i++)
     {
         std::vector<float> &water_in_h = (i % 2 == 0) ? water_levels_a_h : water_levels_b_h;
         std::vector<float> &water_out_h = (i % 2 == 0) ? water_levels_b_h : water_levels_a_h;
@@ -200,6 +202,14 @@ int run_simulation(
         if (i % 10 == 0) {
             printf("Iteration %d\n", i);
         }
+
+        if (video_ctx != nullptr) {
+            if (write_video_frame(video_ctx, static_cast<int>(grid_dimens.x),
+                                  static_cast<int>(grid_dimens.y),
+                                  water_out_h.data()) != 0) {
+                host_err = 1;
+            }
+        }
     }
 
     result_h = (num_timesteps % 2 == 0) ? &water_levels_a_h : &water_levels_b_h;
@@ -213,7 +223,9 @@ cleanup:
     if (water_in_tile_d != nullptr) cudaFree(water_in_tile_d);
     if (water_out_tile_d != nullptr) cudaFree(water_out_tile_d);
 
-    return ret == cudaSuccess ? EXIT_SUCCESS : EXIT_FAILURE;
+    if (ret != cudaSuccess)
+        return EXIT_FAILURE;
+    return host_err == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
 void usage()
@@ -256,6 +268,15 @@ int main(int argc, char *argv[])
 
     double *water_levels = (double *) malloc(grid_width*grid_height*sizeof(double));
 
+    const double fps = (dt > 0.0) ? (1.0 / dt) : 30.0;
+    WriteVideoContext *video =
+        write_video_begin(filename, static_cast<int>(grid_width), static_cast<int>(grid_height), fps);
+    if (video == nullptr) {
+        fprintf(stderr, "Failed to start ffmpeg video encoder (is ffmpeg on PATH?).\n");
+        free(water_levels);
+        return EXIT_FAILURE;
+    }
+
     // Run the simulation
     int ret = run_simulation(
         elevations,
@@ -263,14 +284,17 @@ int main(int argc, char *argv[])
         water_levels,
         num_timesteps,
         dt,
-        inch_to_meter(rain_inches_total)
+        inch_to_meter(rain_inches_total),
+        video
     );
+    if (write_video_end(video) != 0) {
+        fprintf(stderr, "Video encoder finished with an error.\n");
+        ret = EXIT_FAILURE;
+    }
     if (ret != EXIT_SUCCESS) {
+        free(water_levels);
         return EXIT_FAILURE;
     }
-
-    // write_bmp(filename, grid_width, grid_height, water_levels);
-    write_jpg(filename, grid_width, grid_height, water_levels);
 
     // Cleanup
     free(water_levels);
