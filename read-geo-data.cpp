@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include <filesystem>
 #include "gdal_priv.h"
 #include <iostream>
@@ -16,6 +17,11 @@ GeoData read_geo_data(const char *filename_read)
     GDALAllRegister();
     fs::path p(filename_read);
     GDALDataset *dataset = (GDALDataset *)GDALOpen(filename_read, GA_ReadOnly);
+    if (dataset == nullptr)
+    {
+        std::cerr << "Error: could not open raster: " << filename_read << "\n";
+        return {NULL, 0, 0};
+    }
 
     GDALRasterBand *elevation_band = dataset->GetRasterBand(1);
 
@@ -30,6 +36,7 @@ GeoData read_geo_data(const char *filename_read)
     if (err != CE_None)
     {
         std::cerr << "Error reading data into the array.\n";
+        free(elevations);
         return {NULL, 0, 0};
     }
     return {elevations, width, height};
